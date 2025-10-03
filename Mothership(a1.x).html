@@ -1,0 +1,4680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini RTS – Standalone (Config + Build UI)</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #0f1220; color: #e8eaf6; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; }
+  #game { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; display: block; background: radial-gradient(1200px 800px at 50% 50%, #141829 0%, #0f1220 60%, #0b0e19 100%); }
+  .hud { position: absolute; left: 0; top: 0; right: 0; display: flex; gap: 8px; padding: 8px 10px; align-items: center; backdrop-filter: blur(4px); background: linear-gradient(180deg, rgba(10,12,22,0.65), rgba(10,12,22,0.0)); user-select: none; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #1a1f3a; border: 1px solid #2b3158; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04); font-weight: 600; }
+  .rightpanel { position: absolute; right: 10px; top: 60px; width: 320px; max-height: calc(100vh - 70px); overflow: auto; background: rgba(18,22,40,0.85); border: 1px solid #2a2f58; border-radius: 14px; padding: 12px; box-shadow: 0 4px 30px rgba(0,0,0,0.35); }
+  .panel-title { font-size: 14px; opacity: 0.85; margin: 2px 0 8px; letter-spacing: 0.4px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  .btn { padding: 8px 10px; background: #242a52; border: 1px solid #39407a; border-radius: 10px; color: #e8eaf6; cursor: pointer; text-align: center; font-weight: 600; }
+  .btn:hover { background: #2c3466; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .small { font-size: 12px; opacity: 0.8; }
+  .hr { height: 1px; background: linear-gradient(90deg, transparent, #39407a, transparent); margin: 8px 0; }
+  .config-wrap { position: absolute; left: 10px; bottom: 10px; width: 420px; max-width: calc(100vw - 20px); background: rgba(16,20,36,0.88); border: 1px solid #2a2f58; border-radius: 14px; padding: 10px; box-shadow: 0 6px 30px rgba(0,0,0,0.35); }
+  .config-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .config-head .btn { padding: 6px 10px; }
+  #configArea { width: 100%; height: 180px; border-radius: 10px; background: #0e1328; color: #cfe1ff; border: 1px solid #2b335f; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+  .kbd { border: 1px solid #3b427c; background: #171c39; border-radius: 6px; padding: 2px 6px; font-weight: 700; font-size: 12px; }
+  .floating-hint { position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; background: rgba(18,22,40,0.75); border: 1px solid #374077; border-radius: 10px; padding: 6px 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- HUD Top Bar -->
+<div class="hud">
+  <div class="pill">💎 Resources: <span id="res">0</span></div>
+  <div class="pill">🏰 HQ HP: <span id="hqhp">0</span></div>
+  <div class="pill">🧍 Player HP: <span id="php">0</span></div>
+  <div class="pill">👾 Wave <span id="wave">0</span> in <span id="timer">0.0</span>s</div>
+  <div class="pill small">Hold <span class="kbd">Space</span> to fire • <span class="kbd">L-Click</span> select • <span class="kbd">R-Click</span> move/mine/place • <span class="kbd">B</span> to toggle Build • <span class="kbd">H</span> help</div>
+</div>
+
+<!-- Selection / Actions Panel -->
+<div class="rightpanel" id="panel" hidden>
+  <div class="panel-title" id="selTitle">Nothing selected</div>
+  <div id="actions"></div>
+</div>
+
+<!-- Config Panel -->
+<div class="config-wrap" id="configWrap">
+  <div class="config-head">
+    <div><strong>Config</strong> <span class="small">(edit JSON → Apply)</span></div>
+    <div class="row" id="configBtns">
+      <button class="btn" id="btnToggleCfg">Hide</button>
+      <button class="btn" id="btnApply">Apply</button>
+      <button class="btn" id="btnReset">Reset</button>
+      <button class="btn" id="btnSaveCfg">Save</button>
+      <button class="btn" id="btnLoadCfg">Load</button>
+    </div>
+  </div>
+  <textarea id="configArea" spellcheck="false"></textarea>
+  <div class="small" id="configTip" style="margin-top:6px;opacity:.8">
+    Tip: Config affects costs, stats, wave scaling, etc. Saved in localStorage.
+  </div>
+</div>
+
+<div class="floating-hint" id="hint">Select a <strong>Worker</strong> → click <strong>Build</strong> → place structure with Right‑Click</div>
+
+<script>
+// === Mini RTS: "Mothership" – Single-File Implementation ==================================
+// Design goals:
+// - WASD main unit you can shoot with (hold Space).
+// - Procedurally sprinkled resources.
+// - HQ, AKAS the Mothership, can only train Workers, and dock built towers. Workers can mine & build.
+// - Structures: Barracks (trains Soldier), MG Turret, Laser Turret, Missile Turret, Shotgun Turret, Slow Turret,
+//   Drone Turret, Tech Building (research upgrades), Wall (blocks, destructible).
+// - Soldiers are basic ranged units(for now). Enemies are simple melee(Will evolve into more variants).
+// - Enemies spawn in waves. Simple target selection (prefer HQ, else nearest friendly).
+// - More enemies per wave, faster, tougher, more damage.
+// - More enemy spawn points as waves progress.
+// - New Enemy types: Splitter, Brute, Broodmother.
+// - Simple resource economy: mine, carry, deposit at HQ. Resources used for building, training, respawning.
+// - Basic combat: normal projectiles, lasers and missile ammo types.
+// - Simple damage, health, death, respawn (player costs resources).
+// - Simple turret AI: nearest enemy in range, line-of-sight check, will change to prioritize different enemy types.
+// - Basic pathfinding (obstacle avoidance) for units & enemies.
+// - Simple, clean UI: top HUD, right-click context actions, build mode toggle (B).
+// - Pause (P), New Game/Quit to Menu.
+// - Save/Load game state (stubbed for now).
+// - Main Menu with New Game/Continue/Quit (Continue stubbed for now).
+// - Built-in JSON Config (edit-able) with Apply/Save/Load.
+// - Minimal yet modular code with clear sections to tweak.
+// - Quality-of-life features: auto-mine, auto-repair, build queue, assist build.
+// - Mothership docking arm grapple + pull-in mechanic.
+// - Tri-Accelerator projectile option for the player (configurable).
+// - Missile Turret with homing missiles (configurable).
+// ===================== Utilities =====================
+const TAU = Math.PI * 2;
+const lerp = (a,b,t)=>a+(b-a)*t;
+const clamp = (v, a, b)=>Math.max(a, Math.min(b, v));
+const dist2 = (a,b)=>{ const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; };
+const mag = (x,y)=>Math.hypot(x,y);
+const rnd = (min,max)=>Math.random()*(max-min)+min;
+function uid() { return Math.random().toString(36).slice(2); }
+
+function circleOverlap(ax,ay,ar, bx,by,br){ const dx=ax-bx, dy=ay-by; const r=ar+br; return dx*dx+dy*dy < r*r; }
+function pointInCircle(px,py, cx,cy, r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
+
+// Safe upgrade step → returns a multiplier like 1.00, 1.10, ...
+function uStep(key){
+  const u = Number(upgrades?.[key]) || 0;
+  const s = Number(CFG?.upgrades?.[key]?.step) || 0;
+  return 1 + u * s;
+}
+// --- SAFE UPGRADE MULTIPLIER (idempotent) ---
+if (!window.uStep) {
+  window.uStep = function(key){
+    const u = Number((typeof upgrades !== 'undefined' && upgrades) ? upgrades[key] : 0) || 0;
+    const s = Number((typeof CFG !== 'undefined' && CFG && CFG.upgrades && CFG.upgrades[key]) ? CFG.upgrades[key].step : 0) || 0;
+    return 1 + u * s;
+  };
+}
+// local alias (var is redeclare-safe)
+var uStep = window.uStep;
+
+
+
+// ===================== Config (Default) =====================
+const DEFAULT_CONFIG = {
+  world: { chunk: 1200, resPerChunk: 2, resSpread: 1200, baseSize: 1800, nodeMin: 3000, nodeMax: 8000 },
+  economy: { start: 500, depositRadius: 90 },
+  player: { speed: 250, hp: 150, damage: 35, fireRate: 5, bulletSpeed: 700, respawnCost: 200 },
+  worker: { cost: 50, speed: 250, hp: 80, mineRate: 10, carry: 50, buildSpeed: 24 },
+  soldier: { cost: 90, speed: 170, hp: 120, damage: 9, fireRate: 2.5, range: 100 },
+  structures: {
+    hq: { hp: 1200, radius: 160 },
+    barracks: { cost: 200, hp: 650, buildTime: 1.5, radius: 28 },
+    dock: { cost: 100, hp: 260, radius: 42, armExtension: 40 },
+    mg: { cost: 100, hp: 300, radius: 26, damage: 15, fireRate: 3.8, range: 400, bulletSpeed: 600, buildTime: 0.8, },
+    shotgun: { cost: 200, hp: 400, radius: 26, pellets: 7, spread: 0.65, damage: 11, cooldown: .9, range: 570 },
+    missile: { cost: 1600, hp: 360, radius: 26 },
+    laser: { cost: 1200, hp: 320, radius: 26, damage: 250, fireRate: 0.36, range: 670, beamWidth: 3.2, beamTime: 0.09, color: '#9efff6' },
+    slow: { cost: 100, hp: 680, radius: 26, damage: 2, fireRate: 1.6, range: 300, slow: 0.55, slowDur: 1.5 },
+    drone: { cost: 140, hp: 300, radius: 26, range: 500, drones: 3, droneDamage: 9, droneFireRate: 3.0, orbit: 46 },
+    tech: { cost: 160, hp: 420, radius: 30 },
+    wall: { cost: 10, hp: 850, radius: 12 }
+  },
+  upgrades: {
+    playerDamage: { base: 1.0, step: 0.10, cost: 120 },
+    playerFireRate: { base: 1.0, step: 0.10, cost: 120 },
+    unitHealth: { base: 1.0, step: 0.12, cost: 150 },
+    turretDamage: { base: 1.0, step: 0.10, cost: 150 },
+    globalDamage: { base: 1.0, step: 0.08, cost: 180 },
+    workerMineRate: { base: 1.0, step: 0.15, cost: 120 }, 
+    workerCarryCap: { base: 1.0, step: 0.20, cost: 140 }
+  },
+  waves: { firstDelay: 60, period: 45, spawnRadius: 1400 },
+
+  // Periodic resource spawns (already used by your real-time spawner)
+  resourceSpawns: {
+    enabled: true,
+    interval: 10,
+    perTick: 2,
+    attemptsPerTick: 20,
+    amountMin: 60,
+    amountMax: 160,
+    minDistFromEntities: 180,
+    minDistFromResources: 80,
+    spawnRingMin: 350,
+    spawnRingMax: 2200
+  },
+    missileTurret: {
+    range: 660,
+    rackSize: 3,            // max missiles stored on top
+    buildInterval: 1.2,     // seconds to “manufacture” 1 missile when idle
+    burstRPS: 5,            // launch cadence during burst
+    // missile flight
+    damage: 56,
+    aoe: 70,
+    prox: 14,
+    accel: 700,
+    maxSpd: 640,
+    life: 4.0,
+    turnRate: 6.0,          // aggressive steering
+    retarget: true,
+    lead: true
+  },
+  // NEW: quality-of-life feature flags & defaults
+  qol: {
+  // mining / queue / assist
+  autoMineDefault: true,
+  allowQueueBuilds: true,
+  allowAssistBuild: true,
+
+  // repairs
+  allowRepair: true,
+  autoRepairDefault: false,
+  repairRate: 20,
+  repairCostPerHP: 0.2
+},
+
+mothership: {
+  dockRadius: 200,
+  approachPadding: 36,
+  armWidth: 6,
+  armColor: '#88e0ff',
+  pull: { speed: 260, snap: 28 }  // NEW: beam pull speed & snap distance
+}, 
+ projectiles: {
+    // turn this on to make the player use the tri‑accelerator by default
+    useTriDefault: true,
+    tri: {
+      startSpeed: 160,   // initial speed
+      accel: 900,        // px/s^2
+      maxSpeed: 1300,    // top speed
+      damage: 45,        // on-hit damage applied via explosion
+      explosionRadius: 70,
+      // if you want splash to affect friendlies too:
+      friendlyFire: false
+    }
+  },
+   
+};
+
+// --- Turret Leveling Core (safe to paste now; no behavior change until used) ---
+(function(){
+  // Guard: don't redefine if already present
+  if (window.LevelEngine) return;
+
+  // Generic operators (engine uses these to apply per-stat rules)
+  const Ops = {
+    mult:  (base, L, r) => clamp(base * (1 + (r.perLevel||0) * L), r.min ?? -Infinity, r.cap ? base * r.cap : (r.max ?? Infinity)),
+    add:   (base, L, r) => clamp(base + (r.perLevel||0) * L,      r.min ?? -Infinity,           r.max ?? Infinity),
+    abs:   (_b,   L, r) => clamp((r.start ?? 0) + (r.perLevel||0) * L, r.min ?? -Infinity, r.max ?? Infinity),
+    step:  (base, L, r) => {
+      let v = base;
+      const steps = r.steps || {}; // e.g., {3:+1,5:+1}
+      for (const k in steps){ if (L >= (+k)) v += steps[k]; }
+      if (r.capAbs) v = Math.min(v, r.capAbs(base));
+      return clamp(v, r.min ?? -Infinity, r.max ?? Infinity);
+    }
+  };
+  function clamp(x, lo, hi){ return Math.max(lo, Math.min(hi, x)); }
+
+  // Profiles registry (data only; tweak any time). Examples shown; keep or replace later.
+  const LevelProfiles = {
+        mg: {
+      levelCap: 5,
+      xpCurve: { 2:10, 3:15, 4:20, 5:25 }, // XP thresholds
+      stats: {
+        maxhp:      { mode:'add',  perLevel:20 },  // +20 HP per level
+        damage:  { mode:'add',  perLevel:4, steps:{5:+10}  },  // +4 damage per level
+        fireRate:{ mode:'add',  perLevel:0.5, steps:{5:+2} }, // +0.5 RPS per level
+        range:   { mode:'add',  perLevel:25, steps:{5:+100} },  // +25 range per level
+        r:  { mode:'add',  perLevel:2  },  // +2 radius per level (visual size)
+        },
+      },
+
+    shotgun: {
+      levelCap: 5, xpCurve: {2:3, 3:8, 4:15, 5:25},
+      stats: {
+        maxhp :  { mode:'add',  perLevel:25 },  // +25 HP per level
+        damage:  { mode:'mult', perLevel:+0.5, }, //(multiplicative)
+        spread:  { mode:'add', perLevel:0, min:0.45, max:0.9 },// wider spread (more pellets hit)
+        pellets: { mode:'step', steps:{3:+1, 5:+1}, capAbs:(b)=>b+2 },// more pellets, 
+        r:       { mode:'add',  perLevel:2  },  // +2 radius per level (visual size)
+      },
+    },
+    laser: {
+      levelCap: 5, xpCurve: {2:2, 3:6, 4:12, 5:20},
+      stats: {
+        damage:        { mode:'mult', perLevel:+0.04, cap:1.25 },
+        retargetGrace: { mode:'add',  perLevel:-0.03, min:0.10 }, // faster retarget (lower is better)
+      },
+    },
+    missile: {
+      levelCap: 5, xpCurve: {2:3, 3:9, 4:18, 5:30},
+      stats: {
+        reload:      { mode:'mult', perLevel:-0.07, min:0.45 }, // faster manufacture (lower is better)
+        splashRadius:{ mode:'add',  perLevel:+4,    max:64  },
+      },
+    },
+    slow: {
+      levelCap: 5, xpCurve: {2:3, 3:8, 4:15, 5:25},
+      stats: {
+        slowFactor: { mode:'abs',  start: (/*ignored*/0), perLevel:+0.02, max:0.75 }, // set absolute, cap at 0.75
+        range:      { mode:'mult', perLevel:+0.02, cap:1.15 },
+      },
+    },
+    drone: {
+      levelCap: 5, xpCurve: {2:4, 3:10, 4:18, 5:30},
+      stats: {
+        droneCap: { mode:'step', steps:{3:+1, 5:+1}, capAbs:(b)=>b+2 },
+        droneDmg: { mode:'mult', perLevel:+0.04, cap:1.25 },
+      },
+    },
+  };
+
+  // Enemy → XP mapping (used later when you wire kill credit)
+  const XPByEnemy = { grunt:1, scout:1, splitter:2, brute:4, brood:10 };
+
+  // Engine
+  const LevelEngine = {
+    profiles: LevelProfiles,
+    xpByEnemy: XPByEnemy,
+
+    // Attach to any turret instance with a profile key (e.g., 'mg')
+    attach(inst, profileKey){
+      const prof = this.profiles[profileKey];
+      if (!prof) return inst; // no-op if missing profile
+
+      // state
+      inst.__lv = {
+        key: profileKey,
+        level: 1,
+        xp: 0,
+        cap: prof.levelCap ?? 5,
+        curve: prof.xpCurve || {2:3,3:8,4:15,5:25},
+        base: null
+      };
+
+      // capture base stats once
+      inst.__captureBase = inst.__captureBase || function(){
+        if (this.__lv.base) return;
+        this.__lv.base = {
+          damage: this.damage, fireRate: this.fireRate, range: this.range,
+          maxhp: this.maxhp, r: this.r,
+          reload: this.reload, slowFactor: this.slowFactor, droneCap: this.droneCap,
+          retargetGrace: this.retargetGrace, splashRadius: this.splashRadius,
+          pellets: this.pellets, 
+          spread: this.spread,
+          // add more fields later; unknown fields are simply ignored
+        };
+      };
+
+      // public: gain XP
+      inst.gainXP = inst.gainXP || function(n=1){
+        const L = this.__lv;
+        L.xp += n;
+        while (L.level < L.cap && L.xp >= (L.curve[L.level+1] ?? Infinity)){
+          L.level++;
+          this.applyLevel?.();
+        }
+      };
+
+      // public: apply level (recompute from base)
+inst.applyLevel = inst.applyLevel || function(){
+  const prof = LevelEngine.profiles[this.__lv.key];
+  if (!prof) return;
+  this.__captureBase?.();
+  const base = this.__lv.base || {};
+  const L = this.__lv.level;
+
+  // --- proportional heal setup ---
+  let oldMax = this.maxhp ?? 0;
+  let oldHP  = this.hp ?? 0;
+  let ratio  = (oldMax > 0) ? (oldHP / oldMax) : 1;
+
+  const rules = prof.stats || {};
+  for (const stat in rules){
+    const r = rules[stat] || {};
+    const mode = r.mode || 'mult';
+    const op = Ops[mode] || Ops.mult;
+    const hasBase = Object.prototype.hasOwnProperty.call(base, stat);
+    const start = hasBase ? base[stat] : (r.start ?? 0);
+    const val = op(start, L, r);
+    if (stat === 'reload') this[stat] = Math.max(0.25, val);
+    else if (stat === 'slowFactor') this[stat] = clamp(val, 0, 0.95);
+    else this[stat] = val;
+  }
+
+  // --- proportional heal apply ---
+  if (oldMax > 0 && typeof this.hp === 'number') {
+    this.hp = Math.round(this.maxhp * ratio);
+    if (this.hp > this.maxhp) this.hp = this.maxhp;
+    if (this.hp < 0) this.hp = 0;
+  }
+};
+
+
+      // optional: set level directly (debug)
+      inst.setLevel = inst.setLevel || function(L){
+        this.__lv.level = Math.max(1, Math.min(L, this.__lv.cap));
+        this.applyLevel?.();
+      };
+
+      return inst;
+    }
+  };
+
+  // expose
+  window.LevelEngine = LevelEngine;
+})();
+// --- End Turret Leveling Core ---
+
+let CFG = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
+// ===================== Rendering / Canvas =====================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize); resize();
+
+// ===================== Game State =====================
+const TEAM = { FRIEND: 1, ENEMY: 2 };
+const objects = { units: [], buildings: [], enemies: [], projectiles: [], resources: [], drones: [], effects: [] };
+let resources = CFG.economy.start;
+let camera = { x: 0, y: 0 };
+// === Camera follow target: 'player' | 'mothership' (idempotent) ===
+let camFollow = 'player';
+let __prevPlayerDead = false;
+
+
+function setCameraFollow(target){
+  // normalize & idempotent
+  const t = (target === 'mothership') ? 'mothership' : 'player';
+  if (camFollow !== t) camFollow = t; // idempotent
+}
+
+const COMPASS_THRESHOLD = 900; // distance from player and hq to show compass
+const COMPASS_ORBIT_PX = 48; // offset from player center
+
+// ======================
+// GAME STATE MANAGEMENT
+// ======================
+let GAME_STATE = "menu"; // "menu", "playing", "paused"
+
+// track menu buttons
+const menuButtons = [
+  { text: "Continue", action: "continue", visible: false },
+  { text: "New Game", action: "newgame", visible: true },
+  { text: "Quit", action: "quit", visible: true }
+];
+
+// ======================
+// MENU RENDERING
+// ======================
+function drawMainMenu(ctx){
+  const w = canvas.width, h = canvas.height;
+
+  // background
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0,0,w,h);
+
+  // title
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 48px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("MOTHERSHIP", w/2, h/3);
+
+  // buttons
+  ctx.font = "28px sans-serif";
+  let y = h/2;
+  menuButtons.forEach(btn=>{
+    if(!btn.visible) return;
+    ctx.fillStyle = "#ccc";
+    ctx.fillText(btn.text, w/2, y);
+    btn.x = w/2 - 100; btn.y = y-24; btn.w = 200; btn.h = 40;
+    y += 60;
+  });
+
+  ctx.textAlign = "left";
+}
+
+// ======================
+// MENU INPUT
+// ======================
+canvas.addEventListener("click", e=>{
+  if(GAME_STATE !== "menu") return;
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+  for(const btn of menuButtons){
+    if(!btn.visible) continue;
+    if(mx > btn.x && mx < btn.x+btn.w && my > btn.y && my < btn.y+btn.h){
+      handleMenuAction(btn.action);
+    }
+  }
+});
+
+function handleMenuAction(action){
+  switch(action){
+    case "continue":
+      // we'll wire this after IndexedDB
+      break;
+
+    case "newgame":
+      GAME_STATE = "playing";
+      updateUIVisibility();
+      break;
+
+    case "quit":
+      GAME_STATE = "menu";
+      updateUIVisibility();
+      break;
+  }
+}
+function updateUIVisibility(){
+  document.getElementById('panel').hidden = (GAME_STATE !== 'playing');
+  document.getElementById('configWrap').style.display = (GAME_STATE === 'menu') ? 'block' : 'none';
+}
+
+// ====================== 
+// MAIN DRAW WRAPPER
+
+
+
+// replace your main draw call with this wrapper:
+function mainDraw(ctx){
+  if(GAME_STATE === "menu"){
+    drawMainMenu(ctx);
+  } else if(GAME_STATE === "playing"){
+    // your existing drawWorld(ctx) or similar
+    drawWorld(ctx);
+  } else if(GAME_STATE === "paused"){
+    drawWorld(ctx); // dim it + overlay pause text
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 36px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Paused", canvas.width/2, canvas.height/2);
+    ctx.textAlign = "left";
+  }
+}
+
+// in your main loop, swap calls to draw() with mainDraw(ctx).
+
+// ======================
+// GAME INIT HELPERS
+// ======================
+function startNewGame(){ GAME_STATE = "playing"; } 
+
+
+// stub save/load for now
+async function saveGame(){ /* will wire IndexedDB here later */ }
+async function loadGame(){ return true; }
+
+
+let keys = {};
+let mouse = { x:0, y:0, wx:0, wy:0, down:false, rdown:false };
+let selected = null;
+let dockIntent = null;
+let buildMode = { active:false, type:null, by:null };
+let helpVisible = false;
+// globals
+let lastPickedBuilding = null;
+
+let upgrades = { playerDamage: 0, playerFireRate: 0, unitHealth: 0, turretDamage: 0, globalDamage: 0, workerMineRate: 0, workerCarryCap: 0 };
+
+// Wave system
+let wave = 0; let waveTimer = CFG.waves.firstDelay; let alive = true;
+let resSpawnTimer = (CFG.resourceSpawns?.interval ?? 8);
+
+// ===== Multi-select state =====
+let selection = [];  // array of selected friendlies
+let marquee = { active:false, sx:0, sy:0, x:0, y:0, shift:false, base:[] };
+
+// selection helpers
+function clearSelection(){
+  if (selected) { selected.sel = false; selected = null; }
+  for (const e of selection) e.sel = false;
+  selection.length = 0;
+
+  // NEW: if we had an armed HQ spike/dock grapple intent, cancel it
+  if (dockIntent) clearDockIntent();
+}
+
+function selectSet(arr){
+  clearSelection();
+  for (const e of arr){ if(e && !e.dead){ e.sel = true; selection.push(e); } }
+  selected = selection.length === 1 ? selection[0] : null;
+  renderActions();
+}
+
+function toggleSelection(obj){
+  if (!obj || obj.dead) return;
+  const i = selection.indexOf(obj);
+  if (i >= 0) { obj.sel = false; selection.splice(i,1); }
+  else { obj.sel = true; selection.push(obj); }
+  selected = selection.length === 1 ? selection[0] : null;
+  renderActions();
+}
+
+
+function getFriendlies(){
+  // units + buildings, but often you don't want to group-select the Player (WASD)
+  return [...objects.units.filter(u => !(u instanceof Player)), ...objects.buildings];
+}
+
+// --- Marquee helpers: units-only + dominant-type filter ---
+function isUnit(e){
+  return (e instanceof Worker) || (e instanceof Soldier) || (e instanceof Player) || (typeof MShipSpike!=='undefined' && e instanceof MShipSpike);
+}
+
+function dominantType(arr){
+  // preference order: Worker > Soldier > Player > Spike
+  const score = { Worker: 0, Soldier: 0, Player: 0, Spike: 0 };
+  for (const e of arr){
+    if (e instanceof Worker) score.Worker++;
+    else if (e instanceof Soldier) score.Soldier++;
+    else if (e instanceof Player) score.Player++;
+    else if (typeof MShipSpike!=='undefined' && e instanceof MShipSpike) score.Spike++;
+  }
+  if (score.Worker>0) return 'Worker';
+  if (score.Soldier>0) return 'Soldier';
+  if (score.Player>0) return 'Player';
+  if (score.Spike>0) return 'Spike';
+  return null;
+}
+
+function filterToDominantType(arr){
+  const dom = dominantType(arr);
+  if(!dom) return [];
+  return arr.filter(e =>
+    (dom==='Worker'  && e instanceof Worker) ||
+    (dom==='Soldier' && e instanceof Soldier) ||
+    (dom==='Player'  && e instanceof Player) ||
+    (dom==='Spike'   && (typeof MShipSpike!=='undefined' && e instanceof MShipSpike))
+  );
+}
+
+
+// ===================== Base Classes =====================
+
+class Entity {
+  constructor(x, y, r){
+    this.id = uid();
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+
+    // visual size (also drives collisions)
+    this.r = (r ?? 14);
+    // scale for hitbox vs. visuals (1 = equal; tweak per-entity if needed)
+    this.colliderScale = 1;
+
+    this.maxhp = 100;
+    this.hp = this.maxhp;
+    this.team = TEAM.FRIEND;
+    this.dead = false;
+  }
+
+  // size-relative collider radius (source of truth for collision)
+  getColliderRadius(){
+    return (this.r || 0) * (this.colliderScale || 1);
+  }
+
+  get pos(){ return { x:this.x, y:this.y }; }
+  distTo(e){ return Math.hypot(this.x - e.x, this.y - e.y); }
+  
+  hit(dmg){
+  // sanitize inputs so HP can’t become NaN from bad damage values
+  const amt = Number.isFinite(dmg) ? dmg : 0;
+  const cur = Number.isFinite(this.hp) ? this.hp : (Number(this.maxhp) || 0);
+
+  this.hp = cur - amt;
+  if (this.hp <= 0){ this.hp = 0; this.dead = true; }
+}
+
+  update(dt){}
+  draw(ctx){}
+}
+
+
+class Projectile {
+  constructor(x,y,vx,vy, dmg, fromTeam, kind, slowFx){ this.x=x; this.y=y; this.vx=vx; this.vy=vy; this.r=3; this.dmg=dmg; this.fromTeam=fromTeam; this.dead=false; this.life=2.5; this.kind=kind||'bullet'; this.slowFx=slowFx||null; }
+  update(dt){ this.x+=this.vx*dt; this.y+=this.vy*dt; this.life-=dt; if(this.life<=0) this.dead=true; // collide
+    const arr = this.fromTeam===TEAM.FRIEND? objects.enemies : objects.units.concat(objects.buildings);
+    for(const e of arr){ if(e.dead) continue; if(circleOverlap(this.x,this.y,this.r, e.x,e.y,e.r)){
+      e.hit(this.dmg, this.kind); //existing damage 
+      
+      if(e.hp <= 0){
+        e.dead = true;
+        if(this.source?.gainXP){
+          this.source.gainXP(LevelEngine.xpByEnemy[e.type] || 1);
+        }
+      }
+
+      if(this.kind==='slow' && this.slowFx){ e.applySlow?.(this.slowFx.factor, this.slowFx.duration); }
+      this.dead=true; break; }
+    }
+  }
+  draw(ctx){ ctx.save(); ctx.translate(this.x-camera.x, this.y-camera.y); ctx.fillStyle = this.fromTeam===TEAM.FRIEND? '#9ad3ff' : '#ff7a7a'; ctx.beginPath(); ctx.arc(0,0,this.r,0,TAU); ctx.fill(); ctx.restore(); }
+}
+
+class TriAccelProjectile extends Projectile {
+  constructor(x,y,ang, baseDmg, fromTeam){
+    const C = CFG.projectiles?.tri || {};
+    const sp = C.startSpeed ?? 160;
+    const vx = Math.cos(ang) * sp;
+    const vy = Math.sin(ang) * sp;
+    super(x,y,vx,vy, baseDmg, fromTeam, 'tri', null);
+    this.ang = ang;
+    this.speed = sp;
+    this.accel = C.accel ?? 900;
+    this.maxSpeed = C.maxSpeed ?? 1300;
+    // small collider so it feels snappy; explosion handles the damage
+    this.r = 4;
+  }
+
+  explode(hitX, hitY){
+    const C = CFG.projectiles?.tri || {};
+    const R = C.explosionRadius ?? 70;
+    const dmg = this.dmg; // already includes global multipliers from the caller if desired
+
+    // choose who gets hit
+    const victims = (this.fromTeam===TEAM.FRIEND && !C.friendlyFire)
+      ? objects.enemies
+      : (this.fromTeam===TEAM.FRIEND ? objects.enemies
+                                     : objects.units.concat(objects.buildings));
+
+    for (const e of victims){
+      if (!e || e.dead) continue;
+      const dx = e.x - (hitX ?? this.x), dy = e.y - (hitY ?? this.y);
+      if (dx*dx + dy*dy <= R*R){
+        e.hit(dmg);
+      }
+    }
+
+    // FX
+    objects.effects.push(new ExplosionFX(hitX ?? this.x, hitY ?? this.y, R, 0.28));
+
+    // die
+    this.dead = true;
+  }
+
+  update(dt){
+    // accelerate
+    this.speed = Math.min(this.maxSpeed, this.speed + this.accel*dt);
+    this.vx = Math.cos(this.ang) * this.speed;
+    this.vy = Math.sin(this.ang) * this.speed;
+
+    // move + lifetime
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.life -= dt;
+    if (this.life <= 0){ this.dead = true; return; }
+
+    // collision → explode
+    const arr = this.fromTeam===TEAM.FRIEND ? objects.enemies
+      : objects.units.concat(objects.buildings);
+    for (const e of arr){
+      if (e.dead) continue;
+      if (circleOverlap(this.x, this.y, this.r, e.x, e.y, e.r)){
+        this.explode(this.x, this.y);
+        break;
+      }
+    }
+  }
+
+  draw(ctx){
+    // long, narrow triangle, oriented by this.ang
+    const len = 22;             // visual length
+    const halfW = 4;            // half width (narrow)
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.rotate(this.ang);
+
+    // body
+    ctx.fillStyle = '#cfe9ff';
+    ctx.beginPath();
+    ctx.moveTo(+len*0.55, 0);    // tip
+    ctx.lineTo(-len*0.45, -halfW);
+    ctx.lineTo(-len*0.45, +halfW);
+    ctx.closePath();
+    ctx.fill();
+
+    // faint exhaust flicker (implied acceleration)
+    const tail = Math.max(0, 1 - (this.maxSpeed - this.speed) / (this.maxSpeed - (CFG.projectiles?.tri?.startSpeed ?? 1)));
+    ctx.globalAlpha = 0.25 + 0.45*tail;
+    ctx.strokeStyle = '#88e0ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-len*0.45, 0);
+    ctx.lineTo(-len*0.45 - 6 - 10*tail, 0);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+class HomingMissile extends TriAccelProjectile {
+  constructor(x,y,target, baseDmg, fromTeam, opts=CFG.missileTurret){
+    const ang = target ? Math.atan2(target.y - y, target.x - x) : 0;
+    super(x,y,ang, baseDmg ?? opts.damage, fromTeam);
+    this.accel    = opts.accel;
+    this.maxSpeed = opts.maxSpd;
+    this.life     = opts.life;
+    this.turn     = opts.turnRate;
+    this.prox     = opts.prox;
+    this.aoe      = opts.aoe;
+    this.target   = target || null;
+    this.retarget = !!opts.retarget;
+    this.lead     = !!opts.lead;
+  }
+
+  _acquire(enemies, radius=CFG.missileTurret.range*1.2){
+    let best=null, bestD2=radius*radius;
+    for (const e of enemies){ if (!e || e.dead) continue;
+      const dx=e.x-this.x, dy=e.y-this.y, d2=dx*dx+dy*dy;
+      if (d2<bestD2){ best=e; bestD2=d2; }
+    }
+    return best;
+  }
+
+  _leadIntercept(ex, ey, evx=0, evy=0){
+    const rx=ex-this.x, ry=ey-this.y;
+    const a = evx*evx + evy*evy - this.maxSpeed*this.maxSpeed;
+    const b = 2*(rx*evx + ry*evy);
+    const c = rx*rx + ry*ry;
+    const disc=b*b-4*a*c;
+    if (disc>=0 && Math.abs(a)>1e-6){
+      const s=Math.sqrt(disc);
+      const t1=(-b - s)/(2*a), t2=(-b + s)/(2*a);
+      const t = Math.min(t1>0?t1:Infinity, t2>0?t2:Infinity);
+      return Number.isFinite(t)?t:null;
+    }
+    return null;
+  }
+
+  update(dt){
+    this.life -= dt; if (this.life<=0){ this.dead=true; return; }
+
+    if (!this.target || this.target.dead){
+      if (this.retarget) this.target = this._acquire(objects.enemies);
+    }
+
+    if (this.target && !this.target.dead){
+      const ex=this.target.x, ey=this.target.y;
+      let aimX=ex, aimY=ey;
+      if (this.lead && this.target.vx!==undefined){
+        const t=this._leadIntercept(ex,ey,this.target.vx,this.target.vy);
+        if (t){ aimX=ex + this.target.vx*t; aimY=ey + this.target.vy*t; }
+      }
+      const desired = Math.atan2(aimY - this.y, aimX - this.x);
+      let diff = Math.atan2(Math.sin(desired - this.ang), Math.cos(desired - this.ang));
+      const maxTurn = this.turn*dt;
+      this.ang += Math.max(-maxTurn, Math.min(maxTurn, diff));
+    }
+
+    // accelerate & move (base)
+    super.update(dt);
+
+    // proximity fuse
+    if (this.dead) return;
+    if (this.target && !this.target.dead){
+      const d = Math.hypot(this.target.x - this.x, this.target.y - this.y);
+      if (d <= this.prox + (this.target.r || 8)){
+        this.explode(this.x, this.y);
+      }
+    }
+  }
+}
+
+class BeamEffect {
+  constructor(x1,y1,x2,y2,width,color,ttl){
+    this.x1=x1; this.y1=y1; this.x2=x2; this.y2=y2;
+    this.width=width; this.color=color; this.ttl=ttl; this.dead=false;
+    this.life=ttl;
+  }
+  update(dt){ this.ttl -= dt; if(this.ttl<=0) this.dead=true; }
+  draw(ctx){
+    const a = clamp(this.ttl / this.life, 0, 1);
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+    ctx.globalAlpha = 0.2 + 0.8*a;
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.width * (0.8 + 0.4*a);
+    ctx.beginPath();
+    ctx.moveTo(this.x1, this.y1);
+    ctx.lineTo(this.x2, this.y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+class ExplosionFX {
+  constructor(x,y,r,ttl=0.25){
+    this.x=x; this.y=y; this.r=r; this.ttl=ttl; this.life=ttl; this.dead=false;
+  }
+  update(dt){ this.ttl -= dt; if(this.ttl<=0) this.dead=true; }
+  draw(ctx){
+    const a = Math.max(0, this.ttl / this.life);
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.globalAlpha = 0.25 + 0.45*a;
+    ctx.strokeStyle = '#9ad3ff';
+    ctx.lineWidth = 2 + 3*(1-a);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r * (1 + 0.35*(1-a)), 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+
+
+class Unit extends Entity {
+  constructor(x,y,r){ super(x,y,r); this.speed=120; this.target=null; this.sel=false; this.atkCooldown=0; this.range=180; this.damage=6; this.fireRate=1.3; this.moveTo=null; }
+  moveTowards(tx,ty, dt){ const dx=tx-this.x, dy=ty-this.y; const d=Math.hypot(dx,dy)||1; const sp=this.speed; const vx=dx/d*sp, vy=dy/d*sp; this.x+=vx*dt; this.y+=vy*dt; }
+  autoAttack(dt, cand){ // simple nearest
+    this.atkCooldown-=dt; if(this.atkCooldown<0) this.atkCooldown=0;
+    let nearest=null, nd=1e9; for(const e of cand){ if(e.dead) continue; const d=this.distTo(e); if(d<nd){ nd=d; nearest=e; } }
+    if(nearest && nd<=this.range){ if(this.atkCooldown<=0){ this.fireAt(nearest); this.atkCooldown = 1/this.fireRate; } }
+  }
+  fireAt(target){ const ang = Math.atan2(target.y-this.y, target.x-this.x); const sp = 420; const vx=Math.cos(ang)*sp, vy=Math.sin(ang)*sp; objects.projectiles.push(new Projectile(this.x,this.y,vx,vy, this.damage*(1+upgrades.globalDamage*CFG.upgrades.globalDamage.step), this.team)); }
+  drawSelection(ctx){ if(!this.sel) return; ctx.save(); ctx.translate(this.x-camera.x, this.y-camera.y); ctx.strokeStyle='#8ad'; ctx.lineWidth=2; ctx.setLineDash([4,2]); ctx.beginPath(); ctx.arc(0,0,this.r+6,0,TAU); ctx.stroke(); ctx.restore(); }
+}
+
+class Player extends Unit {
+  constructor(x,y){ super(x,y,14); const C=CFG.player; this.speed=C.speed; this.maxhp=C.hp; this.hp=this.maxhp; this.damage=C.damage; this.fireRate=C.fireRate; this.sel=false; this.team=TEAM.FRIEND; this.fireAcc=0; this.lastAng=0; }
+  update(dt){ // WASD
+    let mx=0,my=0; if(keys['KeyW']) my-=1; if(keys['KeyS']) my+=1; if(keys['KeyA']) mx-=1; if(keys['KeyD']) mx+=1; const m=mx||my?1/Math.hypot(mx,my):0; this.x+=mx*m*this.speed*dt; this.y+=my*m*this.speed*dt;
+    // Aim to mouse
+    const ang = Math.atan2(mouse.wy-this.y, mouse.wx-this.x); this.lastAng=ang;
+    // Shoot on Space
+    if(keys['Space']){ this.fireAcc += dt * (this.fireRate*(1+upgrades.playerFireRate*CFG.upgrades.playerFireRate.step)); const need=1; while(this.fireAcc>=need){ this.fireAcc-=need; const dmg = this.damage*(1+upgrades.playerDamage*CFG.upgrades.playerDamage.step)*(1+upgrades.globalDamage*CFG.upgrades.globalDamage.step); const spd=CFG.player.bulletSpeed; objects.projectiles.push(new Projectile(this.x,this.y, Math.cos(ang)*spd, Math.sin(ang)*spd, dmg, TEAM.FRIEND)); }
+    } else { this.fireAcc=0; }
+  }
+  draw(ctx){
+  ctx.save();
+  ctx.translate(this.x - camera.x, this.y - camera.y);
+  ctx.rotate(this.lastAng);
+
+  // size driver (change this.r in the constructor to scale the whole ship)
+  const s = this.r;         // base size
+  const b = s * .8;        // how far the rear base sits behind center
+  const t = 2 * b;          // tip forward (2b makes centroid x=0)
+  const h = s * 1;      // half-height of the triangle
+
+  // Body: centered isosceles triangle (tip points forward)
+  ctx.fillStyle = '#7fd1ff';
+  ctx.beginPath();
+  ctx.moveTo(t, 0);        // tip (forward)
+  ctx.lineTo(-b, -h);      // rear-top
+  ctx.lineTo(-b,  h);      // rear-bottom
+  ctx.closePath();
+  ctx.fill();
+
+  // Barrel (kept; scaled so it matches body size)
+  const barrelLen = Math.max(14, s * 1.3);
+  const barrelW   = Math.max(5,  s * 0.45);
+  ctx.fillStyle = '#cfe9ff';
+  ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
+
+  ctx.restore();
+  this.drawSelection(ctx);
+ }
+}
+
+function findNearestResource(x, y){
+  let best = null, bd = Infinity;
+  for (const r of objects.resources){
+    if (!r || r.dead || r.amount <= 0) continue;
+    const dx = x - r.x, dy = y - r.y;
+    const d2 = dx*dx + dy*dy;
+    if (d2 < bd){ bd = d2; best = r; }
+  }
+  return best;
+}
+
+
+class Worker extends Unit {
+  constructor(x,y){
+    super(x,y,12);
+    const C=CFG.worker;
+    this.speed=C.speed;
+    this.maxhp=C.hp;
+    this.hp=this.maxhp;
+    this.mineRate=C.mineRate;
+    this.carryCap=C.carry;
+    this.carry=0;
+    this.state='idle';
+    this.targetRes=null;
+    this.buildSite=null;
+    this.team=TEAM.FRIEND;
+    this.fireRate=0;
+
+    // QoL hooks
+    this.autoMine = (this.autoMine ?? (CFG.qol?.autoMineDefault ?? true));
+
+    this.autoRepair = (CFG.qol?.autoRepairDefault ?? false);
+    this.buildQueue = [];
+    this.repairTarget = null;
+  }
+
+  // Queue helpers
+  enqueueBuild(building){ this.buildQueue.push(building); }
+  _dequeueNextBuild(){
+    while (this.buildQueue.length){
+      const b = this.buildQueue.shift();
+      if (b && !b.dead && !b.active) return b;
+    }
+    return null;
+  }
+
+  update(dt){
+  // movement-to orders
+  if(this.moveTo){
+    const d=Math.hypot(this.moveTo.x-this.x, this.moveTo.y-this.y);
+    if(d>4){ this.moveTowards(this.moveTo.x,this.moveTo.y,dt); }
+    else this.moveTo=null;
+
+    return; // early exit if moving to a specific point
+  }
+
+  // helper: start mining nearest node (no range limit)
+  const tryAutoMine = ()=>{
+    if(!this.autoMine) return false;
+    const newRes = findNearestResource(this.x,this.y);
+    if(newRes){
+      this.targetRes = newRes;
+      this.state     = 'mining';
+      this.moveTo    = null;
+      return true;
+    }
+    return false;
+  };
+
+  if(this.state==='mining' && this.targetRes && !this.targetRes.dead){
+    const d=this.distTo(this.targetRes);
+    if(d>this.r + this.targetRes.r + 4){
+      this.moveTowards(this.targetRes.x,this.targetRes.y,dt);
+    } else {
+      const capMult = 1 + (upgrades.workerCarryCap * CFG.upgrades.workerCarryCap.step || 0);
+      const effCap  = this.carryCap * capMult;
+      const rateMul = 1 + (upgrades.workerMineRate * CFG.upgrades.workerMineRate.step || 0);
+      const take = Math.min(this.mineRate*rateMul*dt, effCap-this.carry, this.targetRes.amount);
+      this.carry += take;
+      this.targetRes.amount -= take;
+      if(this.targetRes.amount<=0){ this.targetRes.dead=true; this.targetRes=null; }
+      if(this.carry>=effCap || !this.targetRes){
+        this.state='return';
+      }
+    }
+  }
+  else if(this.state==='return'){
+    const hq=getHQ();
+    const d=this.distTo(hq);
+    if(d>CFG.economy.depositRadius){
+      this.moveTowards(hq.x,hq.y,dt);
+    } else {
+      resources += this.carry;
+      this.carry = 0;
+      // Immediately try to pick a new node; if none found, go idle (and the idle scanner below will retry)
+      if(!tryAutoMine()){
+        this.state='idle';
+        // set a tiny rescan timer so we try again soon without user input
+        this._idleScan = 0.25; // seconds
+      }
+    }
+  }
+  else if(this.state==='building' && this.buildSite){
+    const b=this.buildSite; const d=this.distTo(b);
+    if(d>b.r+8){ this.moveTowards(b.x,b.y,dt); }
+    else {
+      b.buildProgress = (b.buildProgress||0) + CFG.worker.buildSpeed*dt;
+      if(b.buildProgress >= b.requiredBuild){
+        b.active=true;
+        const next = this._dequeueNextBuild();
+        if (next){
+          this.buildSite = next;
+          this.state = 'building';
+          this.moveTo = { x: next.x, y: next.y };
+        } else {
+          this.state='idle';
+          this.buildSite=null;
+          this._idleScan = 0.25; // allow instant retry for mining if desired
+        }
+      }
+    }
+  }
+  else if(this.state==='repair' && this.repairTarget){
+    const t=this.repairTarget;
+    if(t.dead || t.hp>=t.maxhp){ this.state='idle'; this.repairTarget=null; }
+    else {
+      const d=this.distTo(t);
+      if(d>t.r+10){ this.moveTowards(t.x,t.y,dt); }
+      else {
+        const cost = CFG.qol.repairCostPerHP * dt * CFG.qol.repairRate;
+        if(resources >= cost){
+          resources -= cost;
+          t.hp = Math.min(t.maxhp, t.hp + CFG.qol.repairRate*dt);
+          if(t.hp>=t.maxhp){ this.state='idle'; this.repairTarget=null; this._idleScan = 0.25; }
+        } else {
+          this.state='idle'; this.repairTarget=null; this._idleScan = 0.25;
+        }
+      }
+    }
+  }
+  else { // idle
+    // Auto-repair priority
+    if(CFG.qol.allowRepair && this.autoRepair){
+      let nearest=null, nd=Infinity;
+      for(const b of objects.buildings){
+        if(b.dead || b.hp>=b.maxhp) continue;
+        const d=this.distTo(b);
+        if(d<nd){ nd=d; nearest=b; }
+      }
+      if(nearest){
+        this.state='repair';
+        this.repairTarget=nearest;
+        this.moveTo=null;
+        return;
+      }
+    }
+    // Idle re-scan timer to reduce “one-frame miss”
+    if(this._idleScan==null) this._idleScan = 0;
+    if(this._idleScan > 0){
+      this._idleScan -= dt;
+      if(this._idleScan <= 0){
+        if(tryAutoMine()){
+          this._idleScan = 0;
+          return;
+        }
+        // no resources yet; keep trying every 0.5s while idle
+        this._idleScan = 0.5;
+      }
+    } else {
+      // first-time idle: start the scan cycle
+      this._idleScan = 0.5;
+    }
+  }
+}
+
+    draw(ctx){
+    ctx.save(); 
+    ctx.translate(this.x-camera.x, this.y-camera.y);
+    ctx.fillStyle='#b2ffa6';
+    ctx.beginPath(); 
+    ctx.arc(0,0,10,0,TAU); 
+    ctx.fill();
+
+    // carry bar (scaled to effective capacity)
+const capMult = 1 + (upgrades.workerCarryCap * CFG.upgrades.workerCarryCap.step);
+const effCap  = this.carryCap * capMult;
+if(this.carry>0){
+  ctx.fillStyle='#6ee7ff';
+  const t=this.carry/effCap;
+  ctx.fillRect(-10, 12, 20*Math.min(1,t), 3);
+}
+
+    // indicator icons
+    if(!this.autoMine){
+      ctx.fillStyle='#ffd27a'; 
+      ctx.fillRect(-3, -18, 6, 6); // yellow square
+    }
+    if(this.autoRepair){
+      ctx.fillStyle='#ff7a7a'; 
+      ctx.fillRect(-3, -26, 6, 6); // red square
+    }
+
+    // NEW: repair effect spark
+    if(this.state==='repair'){
+      ctx.fillStyle = (Date.now()%400 < 200) ? '#7aff7a' : '#55ff55';
+      ctx.beginPath();
+      ctx.arc(0, -20, 4, 0, TAU); 
+      ctx.fill();
+    }
+
+    ctx.restore();
+    this.drawSelection(ctx);
+  }
+}
+
+class Soldier extends Unit {
+  constructor(x,y){ super(x,y,12); const C=CFG.soldier; this.speed=C.speed; this.maxhp=C.hp*(1+upgrades.unitHealth*CFG.upgrades.unitHealth.step); this.hp=this.maxhp; this.fireRate=C.fireRate; this.damage=C.damage; this.range=C.range; this.team=TEAM.FRIEND; }
+  update(dt){ if(this.moveTo){ const d=Math.hypot(this.moveTo.x-this.x, this.moveTo.y-this.y); if(d>4){ this.moveTowards(this.moveTo.x,this.moveTo.y,dt); } else this.moveTo=null; }
+    this.autoAttack(dt, objects.enemies);
+  }
+  draw(ctx){ ctx.save(); ctx.translate(this.x-camera.x, this.y-camera.y); ctx.fillStyle='#9fb5ff'; ctx.beginPath(); ctx.arc(0,0,10,0,TAU); ctx.fill(); ctx.restore(); this.drawSelection(ctx); }
+}
+
+class Building extends Entity {
+  constructor(x,y,r){
+    super(x,y,r);
+    this.active = false;
+    this.team = TEAM.FRIEND;
+    this.sel = false;
+    this.blocks = true; // decorative props can set blocks=false
+    this.buildProgress = 0; // used when building is under construction
+    this.blocks = true; // decorative props can set blocks=false
+    this.blocks = true; // decorative props can set blocks=false
+
+    this.requiredBuild = 100;
+
+    // docking fields (used when a building is attached to the mothership or a dock)
+    this.parent = null;   // set to an HQ / Dock when docked
+    this.offsetX = 0;     // local offset from parent.x when docked
+    this.offsetY = 0;     // local offset from parent.y when docked
+  }
+
+  update(dt){
+    // follow parent mothership/dock if docked
+    if (this.parent){
+      this.x = this.parent.x + (this.offsetX || 0);
+      this.y = this.parent.y + (this.offsetY || 0);
+    }
+    // (keep any per-building logic in child classes' update methods)
+  }
+
+  drawBase(ctx, color){
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, TAU);
+    ctx.fill();
+
+    if (!this.active){
+      ctx.strokeStyle = '#ffd27a';
+      ctx.lineWidth = 2;
+      const p = (this.buildProgress || 0) / this.requiredBuild;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.r + 6, -Math.PI/2, -Math.PI/2 + p*TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    if (this.sel){
+      ctx.save();
+      ctx.translate(this.x - camera.x, this.y - camera.y);
+      ctx.strokeStyle = '#8ad';
+      ctx.setLineDash([4,2]);
+      ctx.beginPath();
+      ctx.arc(0, 0, this.r + 8, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+
+class MShipSpike extends Entity {
+  constructor(hq, index){
+    super(hq.x, hq.y, 10);
+    this.hq = hq;
+    this.index = index;        // 0..5
+    this.team = TEAM.FRIEND;
+    this.state = 'idle';       // 'idle' | 'pulling' | 'occupied'
+    this.target = null;        // building being pulled
+    this.docked = null;        // building currently attached at this spike
+    this.sel = false;
+  }
+
+  get anchor(){
+    // Hexagram outer spikes = even steps around a 12-point star
+    const outer = this.hq.r;
+    const ang = ((this.index * 2) / 12) * TAU; // 0, 60°, 120°, ...
+    return { x: this.hq.x + Math.cos(ang)*outer, y: this.hq.y + Math.sin(ang)*outer, ang };
+  }
+
+  startGrapple(target){
+    if (!target || target.dead || target===this.hq) return;
+    if (this.docked) return;       // already occupied
+    if (target.parent) return;     // already docked elsewhere
+    this.target = target;
+    this.state = 'pulling';
+  }
+
+  release(){
+    // If pulling: cancel
+    if (this.state === 'pulling'){
+      this.target = null;
+      this.state = 'idle';
+      return;
+    }
+    // If occupied: undock
+    if (this.state === 'occupied' && this.docked){
+      // keep current world position and clear parent
+      this.docked.parent = null;
+      // (leave its x,y as is; Building.update won't override without parent)
+      this.docked = null;
+      this.state = 'idle';
+    }
+  }
+
+  update(dt){
+    // keep spike positioned at its anchor
+    const a = this.anchor;
+    this.x = a.x; this.y = a.y;
+
+    // while occupied, ensure the docked module stays at the spike tip as HQ moves
+    if (this.state === 'occupied' && this.docked && !this.docked.dead){
+      // keep offsets aligned to anchor so the module rides the spike
+      this.docked.offsetX = a.x - this.hq.x;
+      this.docked.offsetY = a.y - this.hq.y;
+      // optional: hard-set world pos to eliminate drift
+      this.docked.x = a.x;
+      this.docked.y = a.y;
+    }
+
+    // beam pulling behavior
+    if (this.state === 'pulling' && this.target && !this.target.dead){
+      const tx = this.target.x, ty = this.target.y;
+      const dx = a.x - tx, dy = a.y - ty;
+      const d  = Math.hypot(dx,dy) || 1;
+
+      const sp = CFG.mothership?.pull?.speed ?? 260;
+      const step = Math.min(sp*dt, d);
+      this.target.x += (dx / d) * step;
+      this.target.y += (dy / d) * step;
+
+      const snap = CFG.mothership?.pull?.snap ?? 28;
+      if (d <= snap){
+        // SNAP to anchor exactly
+        this.target.x = a.x;
+        this.target.y = a.y;
+
+        // Parent to mothership and lock offset to the spike tip
+        this.target.parent  = this.hq;
+        this.target.offsetX = a.x - this.hq.x;
+        this.target.offsetY = a.y - this.hq.y;
+
+        // Occupy this spike with the module
+        this.docked = this.target;
+        this.target = null;
+        this.state  = 'occupied';
+      }
+    }
+
+    // free the spike automatically if docked module was destroyed
+    if (this.state === 'occupied' && (!this.docked || this.docked.dead)){
+      this.docked = null;
+      this.state = 'idle';
+    }
+  }
+
+  draw(ctx){
+  const sx = this.x - camera.x, sy = this.y - camera.y;
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  // spike tip
+  ctx.fillStyle = (this.state==='occupied') ? '#7ee787'
+                : (this.state==='pulling')  ? '#ffd27a'
+                                             : '#88e0ff';
+  ctx.beginPath(); ctx.arc(0, 0, 6, 0, TAU); ctx.fill();
+
+  // draw beam while pulling
+  if (this.state === 'pulling' && this.target && !this.target.dead){
+    ctx.beginPath();
+    ctx.strokeStyle = CFG.mothership?.armColor ?? '#88e0ff';
+    ctx.lineWidth   = CFG.mothership?.armWidth ?? 6;
+    ctx.moveTo(0,0);
+    ctx.lineTo(this.target.x - camera.x - sx, this.target.y - camera.y - sy);
+    ctx.stroke();
+  }
+
+  // local selection ring (since we don't inherit Unit.drawSelection)
+  if (this.sel){
+    ctx.strokeStyle='#8ad';
+    ctx.setLineDash([4,2]);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r + 8, 0, TAU);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+ }
+}
+
+class DockPort {
+  constructor(dock, index){
+    this.dock = dock;
+    this.index = index;       // 0 or 1 (two outward ports)
+    this.state = 'idle';      // 'idle' | 'pulling' | 'occupied'
+    this.target = null;       // building being pulled
+    this.docked = null;       // building currently attached
+  }
+
+  get anchor(){
+    // Two outward vertices of a triangle:
+    // pick ±60° from the dock's "forward" (we’ll assume 0 rad = east)
+    const r = this.dock.r;
+    const ang = (this.index === 0) ? (Math.PI/3) : (-Math.PI/3);
+    return { x: this.dock.x + Math.cos(ang)*r, y: this.dock.y + Math.sin(ang)*r };
+  }
+
+  startGrapple(target){
+    if (!target || target.dead) return;
+    if (this.docked) return;       // occupied
+    if (target.parent) return;     // already docked elsewhere
+    this.target = target;
+    this.state = 'pulling';
+  }
+
+  release(){
+    if (this.state === 'pulling'){
+      this.target = null;
+      this.state = 'idle';
+      return;
+    }
+    if (this.state === 'occupied' && this.docked){
+      this.docked.parent = null;   // undock in place
+      this.docked = null;
+      this.state = 'idle';
+    }
+  }
+
+  update(dt){
+    const a = this.anchor;
+
+    // Maintain attached module at the port tip
+    if (this.state === 'occupied' && this.docked && !this.docked.dead){
+      this.docked.offsetX = a.x - this.dock.x;
+      this.docked.offsetY = a.y - this.dock.y;
+      this.docked.x = a.x;
+      this.docked.y = a.y;
+    }
+
+    // Pull behavior
+    if (this.state === 'pulling' && this.target && !this.target.dead){
+      const tx = this.target.x, ty = this.target.y;
+      const dx = a.x - tx, dy = a.y - ty;
+      const d  = Math.hypot(dx,dy) || 1;
+
+      const sp   = (CFG.mothership?.pull?.speed ?? 260);
+      const step = Math.min(sp*dt, d);
+      this.target.x += (dx/d) * step;
+      this.target.y += (dy/d) * step;
+
+      const snap = (CFG.mothership?.pull?.snap ?? 28);
+      if (d <= snap){
+        // snap + parent to dock
+        this.target.x = a.x;
+        this.target.y = a.y;
+        this.target.parent  = this.dock;
+        this.target.offsetX = a.x - this.dock.x;
+        this.target.offsetY = a.y - this.dock.y;
+
+        this.docked = this.target;
+        this.target = null;
+        this.state  = 'occupied';
+      }
+    }
+
+    // Auto-free if destroyed
+    if (this.state === 'occupied' && (!this.docked || this.docked.dead)){
+      this.docked = null;
+      this.state = 'idle';
+    }
+  }
+
+  draw(ctx){
+    const a = this.anchor;
+    // port tip
+    ctx.save();
+    ctx.translate(a.x - camera.x, a.y - camera.y);
+    ctx.fillStyle = (this.state==='occupied') ? '#7ee787'
+                : (this.state==='pulling')  ? '#ffd27a'
+                                             : '#88e0ff';
+    ctx.beginPath(); ctx.arc(0,0,5,0,TAU); ctx.fill();
+    ctx.restore();
+
+    // beam while pulling
+    if (this.state === 'pulling' && this.target && !this.target.dead){
+      ctx.save();
+      ctx.translate(-camera.x, -camera.y);
+      ctx.strokeStyle = CFG.mothership?.armColor ?? '#88e0ff';
+      ctx.lineWidth   = CFG.mothership?.armWidth ?? 6;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(this.target.x, this.target.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+
+
+function hqAnchorPos(hq, i){
+  // Hexagram outer spikes are at 12-point star even indices: i maps to angle (i*2)/12
+  const outer = hq.r;                 // use the HQ’s outer “spike” radius
+  const ang = ((i * 2) / 12) * TAU;   // 0, 60°, 120°, ...
+  return { x: hq.x + Math.cos(ang)*outer, y: hq.y + Math.sin(ang)*outer, ang };
+}
+
+function hqSideName(i){  
+  // index 0 starts at the right (0°), then clockwise every 60°  
+  // rename if you want a different orientation  
+  return ['East','South-East','South-West','West','North-West','North-East'][i] || ('Spike '+i);  
+}
+
+
+class HQ extends Building {
+  constructor(x,y){
+    super(x,y, CFG.structures.hq.radius);
+    this.maxhp = CFG.structures.hq.hp;
+    this.hp = this.maxhp;
+    this.active = true;
+
+    // production queue (workers)
+    this.queue = 0;
+    this.queueTime = 0;
+
+    // mobility
+    this.speed = 50;          // chunky crawl speed
+    this.moveTo = null;       // {x,y} target point
+    this.moving = false;      // UI flag
+  }
+
+  update(dt){
+    // pause worker production while moving
+    const canProduce = !this.moving;
+
+    if(canProduce && this.queue > 0){
+      this.queueTime += dt;
+      if(this.queueTime >= 2.5){
+        this.queueTime = 0;
+        this.queue--;
+        spawnWorkerNear(this.x, this.y);
+      }
+    }
+
+    // movement
+    if(this.moveTo){
+      const dx = this.moveTo.x - this.x;
+      const dy = this.moveTo.y - this.y;
+      const d  = Math.hypot(dx,dy);
+      if(d > 2){
+        this.moving = true;
+        const vx = dx / d * this.speed;
+        const vy = dy / d * this.speed;
+        this.x += vx * dt;
+        this.y += vy * dt;
+      } else {
+        this.x = this.moveTo.x;
+        this.y = this.moveTo.y;
+        this.moveTo = null;
+        this.moving = false;
+      }
+    }
+  }
+
+   draw(ctx){
+  ctx.save();
+  ctx.translate(this.x - camera.x, this.y - camera.y);
+
+  // body fill
+  ctx.fillStyle = '#6d80ff';
+
+  // Hexagram: 12-point star (6 outer spikes + 6 inner points)
+  const outer = this.r;         // spike length
+  const inner = this.r * 0.65;  // inner radius (sharper spikes if lower)
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) {
+    const ang = (i / 12) * TAU;
+    const rad = (i % 2 === 0) ? outer : inner;
+    const px = Math.cos(ang) * rad;
+    const py = Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Optional outline
+  // ctx.lineWidth = 2;
+  // ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  // ctx.stroke();
+
+  // --- Selection ring (bigger than default) ---
+  if (this.sel){
+    const ringPad   = 22;     // increase this for a larger ring offset
+    const ringScale = 1.0;    // or use >1.0 to scale with size (e.g., 1.2)
+    const R = this.r * ringScale + ringPad;
+
+    ctx.setLineDash([6,3]);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#8ad';
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.restore();
+ }
+
+}
+
+class Barracks extends Building {
+  constructor(x,y){ super(x,y, CFG.structures.barracks.radius); this.maxhp=CFG.structures.barracks.hp; this.hp=this.maxhp; this.requiredBuild = CFG.structures.barracks.buildTime*CFG.worker.buildSpeed; }
+  update(dt){}
+  draw(ctx){ this.drawBase(ctx,'#7e6dff'); }
+}
+
+class MGTurret extends Building {
+  constructor(x,y){
+    super(x,y, CFG.structures.mg.radius);
+    this.maxhp = CFG.structures.mg.hp;
+    this.hp = this.maxhp;
+    this.damage = CFG.structures.mg.damage;
+    this.fireRate = CFG.structures.mg.fireRate;
+    this.range = CFG.structures.mg.range;
+    this.fire = 0;
+    this.lastAim = 0;    // for barrel orientation
+    this.recoil  = 0;    // tiny visual recoil (0..1)
+    LevelEngine.attach(this, 'mg'); // level editor hook
+
+  }
+  update(dt){
+    if(!this.active) return; 
+    const S=CFG.structures.mg; 
+
+    this.fire = Math.max(0, this.fire - dt); 
+    this.recoil = Math.max(0, this.recoil - 3*dt); 
+
+    // target nearest
+    let t=null, nd=1e9;
+    for(const e of objects.enemies){
+      if(e.dead) continue;
+      const d=this.distTo(e);
+      if(d<nd && d<=this.range){ nd=d; t=e; }
+    }
+
+    if(t){ 
+      const ang = Math.atan2(t.y-this.y, t.x-this.x);
+      this.lastAim = ang;
+
+      if(this.fire<=0){
+
+        this.fire = 1/(this.fireRate); 
+        const sp= (CFG.structures.mg.bulletSpeed ?? 600); // bullet speed config fallback
+        const base = this.damage;
+        const dmg = base
+                  *(1+upgrades.turretDamage*CFG.upgrades.turretDamage.step)
+                  *(1+upgrades.globalDamage*CFG.upgrades.globalDamage.step);
+        
+        const p = new Projectile(this.x,this.y, Math.cos(ang)*sp, Math.sin(ang)*sp, dmg, TEAM.FRIEND);
+        p.source = this;
+        objects.projectiles.push(p);          
+        // single MG shot
+        this.recoil = 0.18; 
+      }
+    }
+  }
+  draw(ctx){
+    const fill = '#5ac8fa';           // MG color
+    const head = '#2b4f63';         // barrel color
+    const r = this.r;
+
+    // base (equilateral hex)
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.beginPath();
+    for(let i=0;i<6;i++){
+      const a = (i/6)*TAU;
+      const px = Math.cos(a)*r, py = Math.sin(a)*r;
+      if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    // build ring if not active
+    if(!this.active){
+      const p=(this.buildProgress||0)/this.requiredBuild;
+      ctx.strokeStyle='#ffd27a';
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(0,0,r+6, -Math.PI/2, -Math.PI/2+p*TAU);
+      ctx.stroke();
+    }
+
+    // twin barrels (oriented)
+    ctx.rotate(this.lastAim);
+    const L = 16 * (1 - 0.5*this.recoil); // recoil shortens barrel
+    const W = 3;
+    const spread = 5; // lateral offset between barrels
+
+    ctx.fillStyle = head;
+    // left barrel
+    ctx.fillRect(0, -spread-W/2, L, W);
+    // right barrel
+    ctx.fillRect(0,  spread-W/2, L, W);
+
+    // little turret cap
+    ctx.beginPath();
+    ctx.arc(-4,0,4,0,TAU);
+    ctx.fill();
+
+    ctx.restore();
+
+    // selection ring (match your style)
+    if(this.sel){
+      ctx.save();
+      ctx.translate(this.x-camera.x, this.y-camera.y);
+      ctx.strokeStyle='#8ad';
+      ctx.setLineDash([4,2]);
+      ctx.beginPath();
+      ctx.arc(0,0,r+8,0,TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+
+class ShotgunTurret extends Building {
+  constructor(x,y){
+    super(x,y, CFG.structures.shotgun.radius);
+    this.maxhp = CFG.structures.shotgun.hp;
+    this.hp = this.maxhp;
+    this.cool = 0;
+    this.lastAim = 0;
+    this.recoil  = 0;
+    this.damage = CFG.structures.shotgun.damage;
+    this.pellets = CFG.structures.shotgun.pellets;
+    this.spread = CFG.structures.shotgun.spread;
+    LevelEngine.attach(this, 'shotgun'); // level editor hook
+  }
+  update(dt){
+    if(!this.active) return;
+    const S=CFG.structures.shotgun;
+    this.cool = Math.max(0, this.cool - dt);
+    this.recoil = Math.max(0, this.recoil - 2.5*dt);
+
+    // target nearest
+    let t=null, nd=1e9;
+    for(const e of objects.enemies){
+      if(e.dead) continue;
+      const d=this.distTo(e);
+      if(d<nd && d<=S.range){ nd=d; t=e; }
+    }
+
+    if(t && this.cool<=0){
+      this.cool = S.cooldown;
+      const baseAng=Math.atan2(t.y-this.y, t.x-this.x);
+      this.lastAim = baseAng;
+
+      for (let i=0;i<this.pellets;i++){
+  const ang = baseAng + (Math.random()-0.5)*this.spread;
+  const sp = 480;
+  const dmg = this.damage
+    * (1 + upgrades.turretDamage * CFG.upgrades.turretDamage.step)
+    * (1 + upgrades.globalDamage * CFG.upgrades.globalDamage.step);
+  const p = new Projectile(this.x, this.y, Math.cos(ang)*sp, Math.sin(ang)*sp, dmg, TEAM.FRIEND);
+  p.source = this;          // ⬅️ so kills grant XP to this turret
+  objects.projectiles.push(p);
+}
+
+      this.recoil = 0.28;
+    }
+  }
+  draw(ctx){
+    const fill = '#ffd27a';          // Shotgun color
+    const head = '#6b4a1f';         // barrel color
+    const r = this.r;
+
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+
+    // base hex
+    ctx.beginPath();
+    for(let i=0;i<6;i++){
+      const a = (i/6)*TAU;
+      const px = Math.cos(a)*r, py = Math.sin(a)*r;
+      if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    // build ring if not active
+    if(!this.active){
+      const p=(this.buildProgress||0)/this.requiredBuild;
+      ctx.strokeStyle='#ffd27a';
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(0,0,r+6, -Math.PI/2, -Math.PI/2+p*TAU);
+      ctx.stroke();
+    }
+
+    // triple barrels with slight spread
+    ctx.rotate(this.lastAim);
+    const L = 13 * (1 - 0.45*this.recoil);
+    const W = 4;
+
+    ctx.fillStyle = head;
+    // center
+    ctx.fillRect(0, -W/2, L, W);
+    // slight up
+    ctx.save(); ctx.rotate(-0.18); ctx.fillRect(0, -W/2, L, W); ctx.restore();
+    // slight down
+    ctx.save(); ctx.rotate(+0.18); ctx.fillRect(0, -W/2, L, W); ctx.restore();
+
+    // chunky cap
+    ctx.beginPath();
+    ctx.arc(-5,0,5,0,TAU);
+    ctx.fill();
+
+    ctx.restore();
+
+    if(this.sel){
+      ctx.save();
+      ctx.translate(this.x-camera.x, this.y-camera.y);
+      ctx.strokeStyle='#8ad';
+      ctx.setLineDash([4,2]);
+      ctx.beginPath();
+      ctx.arc(0,0,r+8,0,TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+class LaserTurret extends Building {
+  constructor(x,y){
+    super(x,y, CFG.structures.laser.radius);
+    const S = CFG.structures.laser;
+    this.maxhp = S.hp; this.hp = this.maxhp;
+    this.fire = 0;
+    this.lastAim = 0;
+    this.recoil = 0;           // tiny head jiggle
+    this.target = null;          // persist target across ticks
+    this.retargetGrace = 0.25;   // seconds; tiny delay after switching
+    this.justSwitched  = 0;      // countdown gate before firing
+
+
+
+  }
+  update(dt){
+  if(!this.active) return;
+  const S = CFG.structures.laser;
+
+  // cooldowns / recoil
+  this.fire   = Math.max(0, this.fire - dt);
+  this.recoil = Math.max(0, this.recoil - 3*dt);
+
+  // drop target if invalid
+  if (this.target && (this.target.dead || this.distTo(this.target) > S.range)) {
+    this.target = null;
+  }
+
+  // find a candidate (nearest in range), but don't instantly fire—apply grace if we switched
+  let best=null, nd=1e9;
+  for (const e of objects.enemies){
+    if (e.dead) continue;
+    const d = this.distTo(e);
+    if (d < nd && d <= S.range){ nd = d; best = e; }
+  }
+
+  // handle retargeting grace
+  if (best !== this.target){
+    this.target = best;
+    this.justSwitched = this.target ? this.retargetGrace : 0;
+  }
+
+  // brief hold after switching, then pew
+  if (this.justSwitched > 0){
+    this.justSwitched -= dt;
+    return;
+  }
+
+  // fire
+  if (this.target && this.fire <= 0){
+    this.fire = 1 / (S.fireRate);
+
+    // dmg calc (keep your current pattern; swap to uStep later if you like)
+    const dmg = S.damage
+              * (1 + upgrades.turretDamage * CFG.upgrades.turretDamage.step)
+              * (1 + upgrades.globalDamage * CFG.upgrades.globalDamage.step);
+
+    // IMPORTANT: pass kind so Brute DR is ignored for lasers
+    this.target.hit(dmg, 'laser');  // hitscan: apply immediately
+
+    // beam visual (unchanged)
+    objects.effects.push(new BeamEffect(
+      this.x, this.y, this.target.x, this.target.y, S.beamWidth, S.color, S.beamTime
+    ));
+    this.lastAim = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+    this.recoil = 0.18;
+  }
+}
+
+  draw(ctx){
+    const S = CFG.structures.laser;
+    const base = '#95ffee';       // hex base
+    const head = '#1a3b36';       // dark barrel head for contrast
+    const r = this.r;
+
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+
+    // hex base
+    ctx.beginPath();
+    for(let i=0;i<6;i++){
+      const a = (i/6)*TAU;
+      const px = Math.cos(a)*r, py = Math.sin(a)*r;
+      if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = base;
+    ctx.fill();
+
+    // build ring if not active
+    if(!this.active){
+      const p=(this.buildProgress||0)/this.requiredBuild;
+      ctx.strokeStyle='#ffd27a'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(0,0,r+6, -Math.PI/2, -Math.PI/2+p*TAU); ctx.stroke();
+    }
+
+    // turret head (single long barrel)
+    ctx.rotate(this.lastAim);
+    ctx.fillStyle = head;
+    const L = 18 * (1 - 0.5*this.recoil);
+    const W = 4;
+    ctx.fillRect(0, -W/2, L, W);
+
+    // small cap
+    ctx.beginPath(); ctx.arc(-4,0,4,0,TAU); ctx.fill();
+
+    ctx.restore();
+
+    if(this.sel){
+      ctx.save();
+      ctx.translate(this.x-camera.x, this.y-camera.y);
+      ctx.strokeStyle='#8ad'; ctx.setLineDash([4,2]);
+      ctx.beginPath(); ctx.arc(0,0,r+8,0,TAU); ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+class MissileRackTurret extends Building {
+  constructor(x,y){
+    super(x,y, (CFG.structures.missile?.radius ?? 24));
+    this.maxhp = (CFG.structures.missile?.hp ?? 360);
+    this.hp = this.maxhp;
+
+    const T = CFG.missileTurret;
+    this.range = T.range;
+    this.angle = 0;
+
+    // rack (idle stockpiling)
+    this.rack = [];
+    this.rackSize = T.rackSize;
+    this.buildTimer = 0;
+    this.buildInterval = T.buildInterval;
+
+    // burst
+    this.burstCD = 0;
+    this.burstRPS = T.burstRPS;
+
+    this.target = null;
+  }
+
+  _inRange(e){
+    const dx=e.x-this.x, dy=e.y-this.y;
+    return (dx*dx + dy*dy) <= this.range*this.range;
+  }
+
+  _pickTarget(){
+    let best=null, bestD2=this.range*this.range;
+    for (const e of objects.enemies){
+      if (!e || e.dead) continue;
+      const dx=e.x-this.x, dy=e.y-this.y, d2=dx*dx+dy*dy;
+      if (d2<bestD2){ best=e; bestD2=d2; }
+    }
+    return best;
+  }
+
+  update(dt){
+  if (!this.active) return;
+  const T = CFG.missileTurret;
+
+  // 1) Always try to stockpile (up to rackSize), regardless of target state
+  if (this.rack.length < this.rackSize){
+    this.buildTimer += dt;
+    if (this.buildTimer >= this.buildInterval){
+      this.buildTimer = 0;
+      this.rack.push({}); // token for drawing
+    }
+  } else {
+    // small QoL: don't let the timer accumulate when full
+    this.buildTimer = 0;
+  }
+
+  // 2) Acquire/refresh target
+  if (!this.target || this.target.dead || !this._inRange(this.target)){
+    this.target = this._pickTarget();
+  }
+
+  // 3) Aim head if we have a target
+  if (this.target){
+    this.angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+  }
+
+  // 4) If we have a target AND at least one missile stocked, burst‑fire
+  this.burstCD = Math.max(0, this.burstCD - dt);
+  if (this.target && this.rack.length > 0 && this.burstCD <= 0){
+    this.rack.pop();
+
+    const baseDmg = T.damage
+      * (1 + upgrades.turretDamage * CFG.upgrades.turretDamage.step)
+      * (1 + upgrades.globalDamage * CFG.upgrades.globalDamage.step);
+
+    const m = new HomingMissile(
+      this.x + Math.cos(this.angle)*14,
+      this.y + Math.sin(this.angle)*14,
+      this.target,
+      baseDmg,
+      TEAM.FRIEND,
+      T
+    );
+    m.ang += (Math.random()*2-1)*0.08; // tiny flair
+    objects.projectiles.push(m);
+
+    this.burstCD = 1 / this.burstRPS;
+  }
+}
+
+
+ draw(ctx){
+  const { x, y, r, angle } = this;
+  const px = x - camera.x, py = y - camera.y;
+
+  ctx.save();
+  ctx.translate(px, py);
+
+  // --- base ----------------------------------------------------
+  drawHex(r, '#6677B8');
+
+  // --- rotating head -------------------------------------------
+  ctx.save();
+  ctx.rotate(angle);
+  const headL = clamp(r * 0.9, 20, 26);
+  const headW = clamp(r * 0.7, 12, 18);
+  ctx.fillStyle = '#9CB4FF';
+  ctx.fillRect(-headL * 0.15, -headW / 2, headL, headW);
+  ctx.restore();
+
+  // --- idle rack missiles (fixed px size) ----------------------
+  const rackCount = Math.min(this.rack?.length || 0, 3);
+  if (rackCount > 0){
+    const MISS_L = 12, MISS_W = 6, GAP = 6;
+    const shelfRadius = r * 0.55;
+    const cx = -Math.cos(angle) * shelfRadius;
+    const cy = -Math.sin(angle) * shelfRadius;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle + Math.PI/2);
+    ctx.fillStyle = '#CFE9FF';
+
+    const stride = MISS_L + GAP;
+    const start  = -(rackCount - 1) * 0.5 * stride;
+
+    for (let i = 0; i < rackCount; i++){
+      ctx.save();
+      ctx.translate(start + i * stride, 0);
+      ctx.beginPath();
+      ctx.moveTo(MISS_L/2, 0);              // nose
+      ctx.lineTo(-MISS_L/2, -MISS_W/2);     // tail top
+      ctx.lineTo(-MISS_L/2,  MISS_W/2);     // tail bottom
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // --- build ring ----------------------------------------------
+  if (!this.active){
+    const p = (this.buildProgress || 0) / this.requiredBuild;
+    progressRing(r + 6, p, '#ffd27a', 2);
+  }
+
+  // --- selection ring ------------------------------------------
+  if (this.sel){
+    strokeCircle(r + 8, '#8ad', [4, 2]);
+  }
+
+  ctx.restore();
+
+  // ===== helpers (scoped) ======================================
+  function drawHex(R, fill){
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++){
+      const a = (i / 6) * TAU;
+      const hx = Math.cos(a) * R;
+      const hy = Math.sin(a) * R;
+      i ? ctx.lineTo(hx, hy) : ctx.moveTo(hx, hy);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function progressRing(R, t, color, lw){
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = lw;
+    ctx.beginPath();
+    ctx.arc(0, 0, R, -Math.PI/2, -Math.PI/2 + t * TAU);
+    ctx.stroke();
+  }
+
+  function strokeCircle(R, color, dash){
+    if (dash) ctx.setLineDash(dash);
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.stroke();
+    if (dash) ctx.setLineDash([]);
+  }
+
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+ }
+}
+
+
+class SlowTurret extends Building {
+  constructor(x,y){ super(x,y, CFG.structures.slow.radius); this.maxhp=CFG.structures.slow.hp; this.hp=this.maxhp; this.cool=0; }
+  update(dt){ if(!this.active) return; const S=CFG.structures.slow; this.cool-=dt; if(this.cool<0) this.cool=0;
+    let t=null, nd=1e9; for(const e of objects.enemies){ if(e.dead) continue; const d=this.distTo(e); if(d<nd && d<=S.range){ nd=d; t=e; } }
+    if(t && this.cool<=0){ this.cool = 1/(S.fireRate); const ang=Math.atan2(t.y-this.y, t.x-this.x); const sp=420; const dmg=S.damage*(1+upgrades.turretDamage*CFG.upgrades.turretDamage.step)*(1+upgrades.globalDamage*CFG.upgrades.globalDamage.step);
+      objects.projectiles.push(new Projectile(this.x,this.y, Math.cos(ang)*sp, Math.sin(ang)*sp, dmg, TEAM.FRIEND, 'slow', {factor:CFG.structures.slow.slow, duration:CFG.structures.slow.slowDur}));
+    }
+  }
+  // Replace only the draw(ctx) method inside class SlowTurret
+draw(ctx){
+  const r = this.r;
+  const base = '#7ee787';
+
+  ctx.save();
+  ctx.translate(this.x - camera.x, this.y - camera.y);
+
+  // --- Hex base (keeps current color) ---
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (i/6) * TAU;
+    const px = Math.cos(a)*r, py = Math.sin(a)*r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = base;
+  ctx.fill();
+
+  // --- Build ring if not active (same behavior as before) ---
+  if (!this.active){
+    const p = (this.buildProgress||0)/this.requiredBuild;
+    ctx.strokeStyle = '#ffd27a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0,0, r+6, -Math.PI/2, -Math.PI/2 + p*TAU);
+    ctx.stroke();
+  }
+
+  // --- Temporal glyph (simple, readable) ---
+  // two concentric rings
+  ctx.strokeStyle = '#2d3a2f';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0,0, r*0.65, 0, TAU); ctx.stroke();
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0,0, r*0.38, 0, TAU); ctx.stroke();
+
+  // four short tick dashes at N/E/S/W
+  const R = r*0.51, len = 5;
+  for (let i = 0; i < 4; i++){
+    const ang = i*(TAU/4);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(ang)*(R-len), Math.sin(ang)*(R-len));
+    ctx.lineTo(Math.cos(ang)*(R+len), Math.sin(ang)*(R+len));
+    ctx.stroke();
+  }
+
+  // “sweep” arc to imply time flow
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0,0, r*0.72, -Math.PI*0.15, Math.PI*0.45);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // --- Selection ring (unchanged style) ---
+  if (this.sel){
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.strokeStyle = '#8ad';
+    ctx.setLineDash([4,2]);
+    ctx.beginPath();
+    ctx.arc(0,0, r+8, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+ }
+
+}
+
+class DroneTurret extends Building {
+  constructor(x,y){ super(x,y, CFG.structures.drone.radius); this.maxhp=CFG.structures.drone.hp; this.hp=this.maxhp; this.drones=[]; this.spawned=false; }
+  update(dt){ if(!this.active) return; if(!this.spawned){ this.spawned=true; const D=CFG.structures.drone; for(let i=0;i<D.drones;i++){ const ang=i*(TAU/D.drones); this.drones.push(new Drone(this, ang)); } }
+    for(const d of this.drones){ d.update(dt); }
+  }
+  draw(ctx){
+  const r = this.r;
+
+  // --- hex base (keep color) ---
+  ctx.save();
+  ctx.translate(this.x - camera.x, this.y - camera.y);
+
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++){
+    const a = (i / 6) * TAU;
+    const px = Math.cos(a) * r, py = Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#b98aff';
+  ctx.fill();
+
+  // --- small dome / eye (simple + readable) ---
+  ctx.beginPath();
+  ctx.fillStyle = '#e7d7ff';      // soft lens color
+  ctx.arc(0, 0, r * 0.35, 0, TAU); // radius ~ 35% of base
+  ctx.fill();
+
+  // thin rim for definition (optional but nice)
+  ctx.strokeStyle = '#4a325e';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // build ring (same behavior as before)
+  if (!this.active){
+    const p = (this.buildProgress || 0) / this.requiredBuild;
+    ctx.strokeStyle = '#ffd27a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 6, -Math.PI/2, -Math.PI/2 + p*TAU);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // selection ring (unchanged)
+  if (this.sel){
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.strokeStyle = '#8ad';
+    ctx.setLineDash([4, 2]);
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 8, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // draw drones (unchanged)
+  for (const d of this.drones){ d.draw(ctx); }
+}
+
+}
+
+class Wall extends Building {
+  constructor(x,y){ super(x,y, CFG.structures.wall.radius); this.maxhp=CFG.structures.wall.hp; this.hp=this.maxhp; this.active=true; }
+  update(dt){}
+  draw(ctx){ this.drawBase(ctx,'#9aa3b6'); }
+}
+
+class Tech extends Building {
+  constructor(x,y){ super(x,y, CFG.structures.tech.radius); this.maxhp=CFG.structures.tech.hp; this.hp=this.maxhp; }
+  update(dt){}
+  draw(ctx){ this.drawBase(ctx,'#88e0ff'); }
+}
+
+class Dock extends Building {
+  constructor(x,y){
+    super(x,y, CFG.structures.dock.radius);
+    this.maxhp = CFG.structures.dock.hp;
+    this.hp = this.maxhp;
+
+    // orientation: angle that points the inward vertex toward parent
+    this.inwardAng = 0;
+
+    // docking state
+    this.leftDocked  = null;   // child at left vertex
+    this.rightDocked = null;   // child at right vertex
+
+    // pull state for “grapple” actions from the Dock UI
+    this.pull = { state:'idle', target:null, which:null }; // which: 'L' | 'R'
+
+    // QoL: whether to push children outward by extension length
+    this.extendArm = false;
+  }
+
+  // compute the triangle’s vertices (in world space), given inward orientation
+  vertices(){
+    // inward vertex points to parent; outward ones are ±120° from inward
+    const r  = this.r;
+    const inA = this.inwardAng;                 // inward vertex angle
+    const L  = inA + (2*Math.PI/3);             // +120°
+    const R  = inA - (2*Math.PI/3);             // -120°
+    return [
+      {x: this.x + Math.cos(inA)*r, y: this.y + Math.sin(inA)*r}, // inward
+      {x: this.x + Math.cos(L)*r,   y: this.y + Math.sin(L)*r},   // left (outward)
+      {x: this.x + Math.cos(R)*r,   y: this.y + Math.sin(R)*r}    // right (outward)
+    ];
+  }
+
+  // left/right anchor (apply optional extension)
+  anchor(which){
+    const [inV, leftV, rightV] = this.vertices();
+    const base = (which==='L') ? leftV : rightV;
+    if (!this.extendArm) return base;
+
+    // push outward away from this Dock’s center
+    const dx = base.x - this.x, dy = base.y - this.y;
+    const d  = Math.hypot(dx,dy) || 1;
+    const ext = CFG.structures.dock.armExtension || 50;
+    return { x: base.x + (dx/d)*ext, y: base.y + (dy/d)*ext };
+  }
+
+  startGrapple(target, which){
+    if (!target || target.dead || target===this || target===this.parent) return;
+    if (which!=='L' && which!=='R') return;
+
+    // don’t double-occupy a side
+    if ((which==='L' && this.leftDocked) || (which==='R' && this.rightDocked)) return;
+    if (target.parent) return; // already docked elsewhere
+
+    this.pull.state  = 'pulling';
+    this.pull.target = target;
+    this.pull.which  = which;
+  }
+
+  release(which){
+    // release a specific side if docked
+    const side = (which==='L') ? 'leftDocked' : (which==='R') ? 'rightDocked' : null;
+    if (side && this[side]){
+      this[side].parent = null; // leave in world where it is
+      this[side] = null;
+      return;
+    }
+    // or cancel pulling
+    this.pull.state  = 'idle';
+    this.pull.target = null;
+    this.pull.which  = null;
+  }
+
+  update(dt){
+    // if attached to a parent, face inward toward it
+    if (this.parent){
+      const ang = Math.atan2(this.parent.y - this.y, this.parent.x - this.x);
+      this.inwardAng = ang;
+    }
+
+    // make docked children ride with this Dock (keep exact anchor)
+    const L = this.leftDocked, R = this.rightDocked;
+    if (L && !L.dead){
+      const a = this.anchor('L');
+      L.parent  = this;                 // ensure parent is this Dock
+      L.offsetX = a.x - this.x;
+      L.offsetY = a.y - this.y;
+      L.x = a.x; L.y = a.y;             // kill drift
+    }
+    if (R && !R.dead){
+      const a = this.anchor('R');
+      R.parent  = this;
+      R.offsetX = a.x - this.x;
+      R.offsetY = a.y - this.y;
+      R.x = a.x; R.y = a.y;
+    }
+
+    // pulling behavior
+    if (this.pull.state === 'pulling' && this.pull.target && !this.pull.target.dead){
+      const a  = this.anchor(this.pull.which);
+      const t  = this.pull.target;
+      const dx = a.x - t.x, dy = a.y - t.y;
+      const d  = Math.hypot(dx,dy) || 1;
+      const sp = (CFG.mothership?.pull?.speed ?? 260);
+      const step = Math.min(sp*dt, d);
+      t.x += (dx/d)*step; t.y += (dy/d)*step;
+
+      const snap = (CFG.mothership?.pull?.snap ?? 28);
+      if (d <= snap){
+        // snap + parent
+        t.x = a.x; t.y = a.y;
+        t.parent  = this;
+        t.offsetX = a.x - this.x;
+        t.offsetY = a.y - this.y;
+
+        if (this.pull.which === 'L') this.leftDocked = t;
+        else this.rightDocked = t;
+
+        this.pull.state  = 'idle';
+        this.pull.target = null;
+        this.pull.which  = null;
+      }
+    } else {
+      // if pulling target vanished, stop
+      if (this.pull.state === 'pulling') {
+        this.pull.state = 'idle';
+        this.pull.target = null;
+        this.pull.which = null;
+      }
+    }
+  }
+
+  draw(ctx){
+  // precompute world-space vertices and anchors
+  const vs = this.vertices();            // [inward, left, right] in world coords
+  const baseL = vs[1], baseR = vs[2];    // base (no extension) anchor points
+  const aL = this.anchor('L');           // final anchor (may be extended)
+  const aR = this.anchor('R');
+
+  ctx.save();
+  ctx.translate(this.x - camera.x, this.y - camera.y);
+
+  // --- triangle body (local-space) ---
+  ctx.fillStyle = '#8aa1ff';
+  ctx.beginPath();
+  ctx.moveTo(vs[0].x - this.x, vs[0].y - this.y);
+  ctx.lineTo(vs[1].x - this.x, vs[1].y - this.y);
+  ctx.lineTo(vs[2].x - this.x, vs[2].y - this.y);
+  ctx.closePath();
+  ctx.fill();
+
+  // --- draw arm bars if extended OR if a child is docked ---
+  const armColor = (CFG.mothership?.armColor ?? '#88e0ff');
+  const armWidth = (CFG.mothership?.armWidth ?? 6);
+
+  const drawArm = (basePt, endPt)=>{
+    // convert to local
+    const x1 = basePt.x - this.x, y1 = basePt.y - this.y;
+    const x2 = endPt.x  - this.x, y2 = endPt.y  - this.y;
+    ctx.beginPath();
+    ctx.strokeStyle = armColor;
+    ctx.lineWidth   = armWidth;
+    ctx.lineCap     = 'round';
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  };
+
+  // Left arm
+  if (this.extendArm || this.leftDocked){
+    // only draw the segment if there actually is extension distance
+    const hasExt = Math.hypot(aL.x - baseL.x, aL.y - baseL.y) > 1;
+    if (hasExt) drawArm(baseL, aL);
+  }
+
+  // Right arm
+  if (this.extendArm || this.rightDocked){
+    const hasExt = Math.hypot(aR.x - baseR.x, aR.y - baseR.y) > 1;
+    if (hasExt) drawArm(baseR, aR);
+  }
+
+  // --- anchor dots ---
+  const dot = (ax, ay, color)=>{
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(ax - this.x, ay - this.y, 4, 0, TAU);
+    ctx.fill();
+  };
+  dot(aL.x, aL.y, '#7ee787'); // left
+  dot(aR.x, aR.y, '#7ee787'); // right
+
+  // --- pulling beam (if mid-grapple) ---
+  if (this.pull.state === 'pulling' && this.pull.target && !this.pull.target.dead){
+    const A = this.anchor(this.pull.which);
+    ctx.beginPath();
+    ctx.strokeStyle = armColor;
+    ctx.lineWidth   = armWidth;
+    ctx.lineCap     = 'round';
+    ctx.moveTo(A.x - this.x, A.y - this.y);
+    ctx.lineTo(this.pull.target.x - this.x, this.pull.target.y - this.y);
+    ctx.stroke();
+  }
+
+  // --- selection ring ---
+  if (this.sel){
+    ctx.strokeStyle = '#8ad';
+    ctx.setLineDash([4,2]);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r + 8, 0, TAU);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+}
+
+class Drone {
+  constructor(parent, ang){
+    this.parent = parent;
+    this.ang = ang;
+    this.r = 5;
+
+    // Use config if present; fallbacks keep it plug-in safe.
+    const D = CFG.structures.drone || {};
+    this.speed = D.speed || 250;              // chase speed
+    this.returnSpeed = D.returnSpeed || 260;  // speed when returning/orbiting
+    this.range = D.range || 280;              // engagement range (same as turret range)
+    this.leash = D.leash || (this.range + 30);// max distance from parent
+    this.orbit = D.orbit || 46;               // idle orbit radius
+    this.fireRate = D.droneFireRate || 2.0;
+    this.damage = D.droneDamage || 7;
+
+    // Give drones their own world position (start on the orbit ring).
+    this.x = parent.x + Math.cos(ang) * this.orbit;
+    this.y = parent.y + Math.sin(ang) * this.orbit;
+
+    this.cool = 0;
+  }
+
+  update(dt){
+    const D = CFG.structures.drone;
+
+    // If parent’s inactive/dead, just idle in place.
+    if (!this.parent || this.parent.dead || !this.parent.active) {
+      return;
+    }
+
+    // Pick nearest enemy within range **of the drone**.
+    let target = null, nd = Infinity;
+    for (const e of objects.enemies) {
+      if (e.dead) continue;
+      const dx = e.x - this.x, dy = e.y - this.y;
+      const d2 = dx*dx + dy*dy;
+      if (d2 < nd && Math.sqrt(d2) <= this.range) { nd = d2; target = e; }
+    }
+
+    // Leash check: don’t wander too far from parent.
+    const dxp = this.parent.x - this.x, dyp = this.parent.y - this.y;
+    const distFromParent = Math.hypot(dxp, dyp);
+
+    if (distFromParent > this.leash) {
+      // Hard return toward parent if beyond leash.
+      const inv = 1 / (distFromParent || 1);
+      this.x += dxp * inv * this.returnSpeed * dt;
+      this.y += dyp * inv * this.returnSpeed * dt;
+      target = null; // ignore targets while leashing back
+    } else if (target) {
+      // Chase target
+      const dx = target.x - this.x, dy = target.y - this.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      this.x += (dx / dist) * this.speed * dt;
+      this.y += (dy / dist) * this.speed * dt;
+
+      // Fire from the drone's position
+      this.cool -= dt;
+      if (this.cool <= 0) {
+        this.cool = 1 / this.fireRate;
+        const ang = Math.atan2(target.y - this.y, target.x - this.x);
+        const sp = 460;
+        const dmg = this.damage
+          * (1 + upgrades.turretDamage * CFG.upgrades.turretDamage.step)
+          * (1 + upgrades.globalDamage * CFG.upgrades.globalDamage.step);
+        objects.projectiles.push(
+          new Projectile(this.x, this.y, Math.cos(ang) * sp, Math.sin(ang) * sp, dmg, TEAM.FRIEND)
+        );
+      }
+    } else {
+      // No target: return to an orbit point and keep circling smoothly
+      this.ang = (this.ang + dt) % TAU;
+      const homeX = this.parent.x + Math.cos(this.ang) * this.orbit;
+      const homeY = this.parent.y + Math.sin(this.ang) * this.orbit;
+      const dx = homeX - this.x, dy = homeY - this.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      this.x += (dx / dist) * this.returnSpeed * dt;
+      this.y += (dy / dist) * this.returnSpeed * dt;
+    }
+  }
+
+  draw(ctx){
+    ctx.save();
+    ctx.translate(this.x - camera.x, this.y - camera.y);
+    ctx.fillStyle = '#d8b7ff';
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+
+class ResourceNode {
+  constructor(x,y, amount){ this.id=uid(); this.x=x; this.y=y; this.amount=amount; this.r=14+Math.min(26, amount*0.15); this.dead=false; }
+  draw(ctx){
+  if (this.dead) return;
+
+  const TAU = (typeof window !== 'undefined' && window.TAU) ? window.TAU : Math.PI * 2;
+  const px = this.x - camera.x, py = this.y - camera.y;
+
+  // --- deterministic RNG per node so shape stays the same every frame ---
+  // seed from id (fallback to position if id isn't numeric)
+  let baseSeed = (typeof this.id === 'number' ? this.id : (this.x*73856093 ^ this.y*19349663)) >>> 0;
+  let s = (baseSeed ^ 0x9e3779b9) >>> 0;
+  const rand = ()=> (s = (s * 1664525 + 1013904223) >>> 0, (s & 0xffff) / 0xffff);
+
+  // random sides 4–7, locked per node via the seeded RNG
+  const sides = 4 + Math.floor(rand() * 4); // 4,5,6,7
+  const radialJitter = 0.18;      // 0 = perfect polygon
+  const angleJitter  = 0.08;
+  const rVis = this.r * 0.92;     // draw slightly inside collider
+
+  // build polygon verts
+  const verts = [];
+  const ang0 = rand() * TAU;
+  for (let i = 0; i < sides; i++){
+    const a = ang0 + (i / sides) * TAU + (rand()*2 - 1) * angleJitter;
+    const r = rVis * (1 + (rand()*2 - 1) * radialJitter);
+    verts.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
+  }
+
+  // draw
+  ctx.save();
+  ctx.translate(px, py);
+
+  // fill (mineral-ish)
+  const g = ctx.createRadialGradient(0, 0, this.r*0.12, 0, 0, this.r);
+  g.addColorStop(0, '#49d5e2');
+  g.addColorStop(1, '#1c8aa0');
+  ctx.fillStyle = g;
+
+  ctx.beginPath();
+  verts.forEach((v,i)=> i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y));
+  ctx.closePath();
+  ctx.fill();
+
+  // edge highlight
+  ctx.strokeStyle = '#7fe7f3';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // tiny glint
+  ctx.globalAlpha = 0.35;
+  ctx.beginPath();
+  ctx.arc(this.r*0.22, -this.r*0.22, 4, 0, TAU);
+  ctx.fillStyle = '#c9fbff';
+  ctx.fill();
+
+  ctx.restore();
+ }
+}
+
+class Enemy extends Unit {
+  constructor(x,y, stats, type="grunt"){ 
+    super(x,y,12); 
+    this.team=TEAM.ENEMY; 
+    this.speed=stats.speed; 
+    this.maxhp=stats.hp; 
+    this.hp=this.maxhp; 
+    this.damage=stats.dmg; 
+    this.atkCooldown=0; 
+    this.range=16; 
+    this.slowFactor=1; 
+    this.slowTimer=0; 
+    this.moveTo=null; 
+    this.spawnIframes=0;
+    this.type = type; 
+    this.r = (stats && stats.r != null) ? stats.r : this.r; // allow override from stats
+
+    if (this.type === 'splitter') this.r = 18; // slightly bigger collider for splitters
+
+    this.splitGen = 0; // generation count for splitters
+    // size per type (affects collisions + hitbox)
+if (this.type === 'brute'){
+  this.r = 21;          // ⬅️ bump this number to make them chonkier (was 12 from super)
+  // optional: give them a hair more melee reach so size feels meaningful
+  this.range = 20;      // default was 16
+    }
+    this.splitGen = 0; // generation count for splitters
+  }
+
+  
+
+  applySlow(f,d){ this.slowFactor = Math.min(this.slowFactor, f); this.slowTimer = Math.max(this.slowTimer, d); }
+  update(dt){ if(this.slowTimer>0){ this.slowTimer-=dt; if(this.slowTimer<=0){ this.slowFactor=1; } 
+  } if (this.spawnIframes > 0) this.spawnIframes -= dt;
+ 
+    const friends = [getHQ(), player, ...objects.buildings.filter(b=>!(b instanceof HQ))];
+    let goal = getHQ(); let nd = this.distTo(goal);
+    for(const f of friends){ if(!f || f.dead) continue; const d=this.distTo(f); if(d < nd*0.9){ nd=d; goal=f; } }
+    // move toward goal
+    const dx=goal.x-this.x, dy=goal.y-this.y; const d=Math.hypot(dx,dy)||1; const sp=this.speed*this.slowFactor; this.x+=dx/d*sp*dt; this.y+=dy/d*sp*dt;
+    // attack if in range
+    if(d < this.range + goal.r){ this.atkCooldown-=dt; if(this.atkCooldown<=0){ this.atkCooldown = 0.6; goal.hit(this.damage); } }
+    // universal enemy → structure collision (all blocking buildings; radius derives from draw size)
+for (const b of objects.buildings){
+  if (!b || b.dead) continue;
+  if (b.blocks === false) continue;         // allow non-blocking decorations
+  // (optional) ignore collision with a parent host; not needed for MVP:
+  // if (b.parent && b.parent === this.parent) continue;
+
+  const br = (typeof b.getColliderRadius === 'function') ? b.getColliderRadius() : (b.r || 0);
+  const er = (typeof this.getColliderRadius === 'function') ? this.getColliderRadius() : (this.r || 0);
+
+  const dx = this.x - b.x;
+  const dy = this.y - b.y;
+  const minR = er + br;
+  const distSq = dx*dx + dy*dy;
+
+  if (distSq < minR*minR){
+    const dist = Math.sqrt(distSq) || 1e-6;  // NaN/zero guard
+    const nx = dx / dist, ny = dy / dist;
+    const pen = (minR - dist);
+
+    // push enemy out; structures are static
+    this.x += nx * pen;
+    this.y += ny * pen;
+      }
+    }
+  }
+
+  
+
+  hit(dmg){
+  if (this.spawnIframes > 0) return;  // ignore all damage while iframes > 0
+  if (this.type === 'brute') dmg *= 0.80;    // 20% DR
+  this.hp -= dmg;
+  this.hitTimer = 0.1;
+  if (this.hp > 0) return;
+
+  // die
+  this.dead = true;
+
+  // splitters: split into two, max 2 generations
+  if (this.type === 'splitter' && this.splitGen < 3){
+    for (let i=0;i<2;i++){
+      const a = Math.random() * Math.PI * 2;
+      const dx = Math.cos(a)*10, dy = Math.sin(a)*25;
+      const child = new Enemy(this.x+dx, this.y+dy, {
+        hp: Math.max(6, Math.floor(this.maxhp * 0.8)),
+        dmg: Math.max(1, Math.floor(this.damage * 0.8)),
+        speed: this.speed * 1.6
+      }, 'splitter');
+      child.r = (this.r||12) * 0.82;
+      child.splitGen = this.splitGen + 1;
+      child.spawnIframes = 0.08; // brief invulnerability on spawn
+      objects.enemies.push(child);
+    }
+  }
+}
+  // brood: count nearby allies on spawn (for visual pips)
+
+  draw(ctx){
+  if (this.dead) return;
+
+  const TAU = Math.PI * 2;
+  const px = this.x - camera.x, py = this.y - camera.y;
+
+  // deterministic per-enemy variation (for cracks/angles)
+  const sid = (this.id ?? 0) ^ ((this.x|0)*73856093) ^ ((this.y|0)*19349663);
+  let s = (sid ^ 0x9e3779b9) >>> 0;
+  const rand = ()=> (s = (1664525*s + 1013904223) >>> 0, (s & 0xffff) / 0xffff);
+
+  // base visuals
+  const r = this.r;
+  const rVis = r; // draw to collider radius
+  const t = (performance.now ? performance.now()*0.001 : 0) + (sid&1023)*0.001;
+
+  ctx.save();
+  ctx.translate(px, py);
+
+  // --- BASE BODY (uniform red) ---
+  const g = ctx.createRadialGradient(0, 0, r*0.2, 0, 0, rVis);
+  g.addColorStop(0, '#ff6b6b');  // bright red core
+  g.addColorStop(1, '#8a1414');  // deep red edge
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, rVis, 0, TAU);
+  ctx.fill();
+
+  // common outline
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffaaaa';
+  ctx.stroke();
+
+  // --- TYPE ACCENTS (all cheap) ---
+  const type = this.type || 'grunt';
+
+  // --- Scout visual accent (warm-red, subtle) ---
+if (this.type === 'scout') {
+  // thin dashed outer ring in bright red
+  ctx.save();
+  ctx.strokeStyle = '#ff4a4a';     // bright red
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 4]);         // short dashes
+  ctx.beginPath();
+  ctx.arc(0, 0, this.r + 3, 0, TAU);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // small forward chevron in darker crimson
+  ctx.strokeStyle = '#b21616';     // darker red for contrast
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-this.r * 0.35, 0);
+  ctx.lineTo(this.r * 0.45, 0);
+  ctx.moveTo(this.r * 0.18, -this.r * 0.22);
+  ctx.lineTo(this.r * 0.45, 0);
+  ctx.lineTo(this.r * 0.18,  this.r * 0.22);
+  ctx.stroke();
+
+  // faint inner pulse (warm, not bright): helps readability without overpowering
+  ctx.fillStyle = 'rgba(255, 96, 96, 0.18)'; // soft red glow
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(2, this.r * 0.28), 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+
+  if (type === 'splitter'){
+    // light ring hinting "segments"
+    ctx.beginPath();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffc9c9';
+    ctx.arc(0, 0, rVis*0.75, 0, TAU);
+    ctx.stroke();
+
+    // 3–4 wedges to imply splitting
+    const wedges = 3 + (sid % 2); // 3 or 4
+    const ang0 = rand()*TAU;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffdede';
+    for (let i=0;i<wedges;i++){
+      const a = ang0 + i*(TAU/wedges);
+      ctx.beginPath();
+      ctx.arc(0, 0, rVis*0.55, a-0.06, a+0.06);
+      ctx.stroke();
+    }
+  }
+
+  else if (type === 'brute'){
+    // thicker armored rim
+    ctx.beginPath();
+    ctx.lineWidth = Math.max(4, rVis*0.12);
+    ctx.strokeStyle = '#a31c1c';
+    ctx.arc(0, 0, rVis*0.88, 0, TAU);
+    ctx.stroke();
+
+    // subtle cross “plating” lines
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#d84848';
+    const a = (sid & 7) * (TAU/8);
+    ctx.beginPath(); ctx.arc(0,0,rVis*0.62, a-0.12, a+0.12); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,0,rVis*0.62, a+TAU/2-0.12, a+TAU/2+0.12); ctx.stroke();
+  }
+
+  else if (type === 'brood'){
+
+    // pulsing aura ring
+    const pulse = 0.08 + 0.04*Math.sin(t*2.1);
+    ctx.beginPath();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,110,110,0.55)';
+    ctx.arc(0, 0, rVis*(1.0 + pulse), 0, TAU);
+    ctx.stroke();
+
+    // brood pips (show capacity vibe)
+    const pips = 6;
+    const filled = Math.min(this._broodAlive|0, pips);
+    for (let i=0;i<pips;i++){
+      const a = i*(TAU/pips) + 0.2;
+      const pr = rVis*1.2;
+      const x = Math.cos(a)*pr, y = Math.sin(a)*pr;
+      ctx.beginPath();
+      ctx.fillStyle = (i < filled) ? '#ffb3b3' : 'rgba(255,179,179,0.25)';
+      ctx.arc(x, y, 3, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // (grunt: no accent; base look already applied)
+
+  // --- HEALTH BAR (simple green) ---
+if (this.maxhp && this.hp < this.maxhp) {            // hide when full
+  const barW = this.r * 2;                           // bar width = diameter
+  const barH = 4;                                    // bar height
+  const x = -this.r;                                 // left edge (local space)
+  const y = -this.r - 8;                             // above the orb
+
+  // background
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x, y, barW, barH);
+
+  // foreground (hp ratio)
+  const ratio = Math.max(0, Math.min(1, this.hp / this.maxhp));
+  ctx.fillStyle = '#00ff5a';
+  ctx.fillRect(x, y, barW * ratio, barH);
+
+  // thin border (optional)
+  ctx.strokeStyle = '#263a2a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, barW, barH);
+}
+
+
+  ctx.restore();
+ }
+
+} 
+
+
+
+// ===================== Game Setup =====================
+const hq = new HQ(0,0); objects.buildings.push(hq);
+
+// Create 6 spike subunits bound to the HQ (non‑selectable; control via HQ panel)
+const spikes = [];
+for (let i = 0; i < 6; i++){
+  const sp = new MShipSpike(hq, i);
+  sp.selectable = false;        // ← prevent click/box selection
+  spikes.push(sp);
+  objects.units.push(sp);
+}
+hq.spikes = spikes;              // convenience reference for UI
+
+
+// AFTER
+let player = new Player(60, 0); objects.units.push(player);
+updateTopHUD();
+
+// seed some resources near base
+for(let i=0;i<10;i++){ const ang = Math.random()*TAU; const d=220 + Math.random()*480; const x=hq.x+Math.cos(ang)*d; const y=hq.y+Math.sin(ang)*d; objects.resources.push(new ResourceNode( x, y, rnd(CFG.world.nodeMin, CFG.world.nodeMax)));
+ }
+
+// Chunk-based procedural sprinkle
+const spawnedChunks = new Set();
+function ensureChunksAround(x,y){
+  const C = CFG.world;
+  const gx = Math.floor(x/C.chunk), gy = Math.floor(y/C.chunk);
+  for(let cy=gy-1; cy<=gy+1; cy++)
+    for(let cx=gx-1; cx<=gx+1; cx++){
+      const key = cx+','+cy;
+      if(spawnedChunks.has(key)) continue;
+      spawnedChunks.add(key);
+      // sprinkle resources
+      for(let i=0;i<C.resPerChunk;i++){
+        const rx = cx*C.chunk + (Math.random()-0.5)*C.resSpread + C.chunk/2;
+        const ry = cy*C.chunk + (Math.random()-0.5)*C.resSpread + C.chunk/2;
+        if(Math.hypot(rx,ry) < C.baseSize) continue; // keep a walkable base area
+        objects.resources.push(new ResourceNode(rx, ry, rnd(CFG.world.nodeMin, CFG.world.nodeMax)));
+      }
+    }
+}
+
+// === Periodic Resource Spawner =============================================
+// Spawns new resource nodes over time, avoiding units/structures/other nodes.
+function canSpawnResourceAt(x, y, cfg){
+  // keep central base area clear (reuse world.baseSize if present)
+  if (Math.hypot(x, y) < (CFG.world?.baseSize || 1200)) return false;
+
+  // avoid buildings & units
+  const minE = cfg.minDistFromEntities;
+  for (const b of objects.buildings){ if(!b.dead && circleOverlap(x,y,minE, b.x,b.y,b.r)) return false; }
+  for (const u of objects.units){     if(!u.dead && circleOverlap(x,y,minE, u.x,u.y,u.r)) return false; }
+
+  // avoid other resources
+  const minR = cfg.minDistFromResources;
+  for (const r of objects.resources){ if(!r.dead && circleOverlap(x,y,minR, r.x,r.y, r.r)) return false; }
+
+  return true;
+}
+
+function spawnPeriodicResourcesPulse(){
+  const cfg = CFG.resourceSpawns;
+  if (!cfg?.enabled) return;
+
+  // spawn in an annulus around HQ; swap to player.x/y if you prefer
+  const cx = hq.x, cy = hq.y;
+
+  for (let k = 0; k < cfg.perTick; k++){
+    let placed = false;
+    for (let att = 0; att < cfg.attemptsPerTick && !placed; att++){
+      const ang = Math.random() * TAU;
+      const rad = cfg.spawnRingMin + Math.random() * (cfg.spawnRingMax - cfg.spawnRingMin);
+      const x = cx + Math.cos(ang) * rad;
+      const y = cy + Math.sin(ang) * rad;
+
+      if (canSpawnResourceAt(x, y, cfg)){
+        const amt = rnd(cfg.amountMin, cfg.amountMax);
+        objects.resources.push(new ResourceNode(x, y, amt));
+        placed = true;
+      }
+    }
+  }
+}
+
+// === enemy-enemy collision resolve (string-key grid; robust with negatives) ===
+function resolveEnemyEnemyCollisions(){
+  const cell = 48;                     // grid size (bigger = cheaper, softer)
+  const grid = new Map();
+  const list = objects.enemies.filter(e => e && !e.dead);
+
+  // bucket indices by cell
+  for (let i = 0; i < list.length; i++){
+    const e = list[i];
+    const cx = Math.floor(e.x / cell), cy = Math.floor(e.y / cell);
+    const key = cx + ',' + cy;
+    let arr = grid.get(key);
+    if (!arr) grid.set(key, arr = []);
+    arr.push(i);                        // store list index
+  }
+
+  const NBH = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+
+  // for each occupied cell, resolve pairs within that cell + 8 neighbors
+  for (const [key, idxs] of grid){
+    const [cxStr, cyStr] = key.split(',');
+    const cx = parseInt(cxStr, 10), cy = parseInt(cyStr, 10);
+
+    const candIdx = [];
+    for (const [dx,dy] of NBH){
+      const arr = grid.get((cx+dx)+','+(cy+dy));
+      if (arr) candIdx.push(...arr);
+    }
+
+    for (let aK = 0; aK < idxs.length; aK++){
+      const i = idxs[aK];
+      const a = list[i]; if (!a) continue;
+      const ar = a.r || 0;
+      let pushes = 0;
+
+      // only resolve pairs where j > i to avoid double work
+      for (let bK = 0; bK < candIdx.length && pushes < 8; bK++){
+        const j = candIdx[bK];
+        if (j <= i) continue;
+        const b = list[j]; if (!b) continue;
+        const br = b.r || 0;
+
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const minR = (ar + br) * 0.98;          // allow a tiny visual overlap
+        const d2 = dx*dx + dy*dy;
+        if (d2 >= minR*minR) continue;
+
+        const d = Math.sqrt(d2) || 1e-6;
+        const nx = dx / d, ny = dy / d;
+        const pen = (minR - d) * 0.5;           // split the correction
+        a.x += nx * pen; a.y += ny * pen;
+        b.x -= nx * pen; b.y -= ny * pen;
+        pushes++;
+      }
+    }
+  }
+}
+
+
+
+
+// ===================== Input =====================
+
+function setDockIntent(hostHQ, spikeIndex){
+  dockIntent = { host: hostHQ, spikeIndex };
+  // optional: show a hint in your footer
+  const hint = document.getElementById('hint');
+  if (hint) hint.textContent = 'Grapple armed — click a friendly building to attach.';
+}
+
+function setDockIntentDock(dock, which){
+  // which = 'L' or 'R'
+  dockIntent = { host: dock, which };
+  if (typeof infoBanner === 'function') {
+    infoBanner(`Dock armed (${which === 'L' ? 'Left' : 'Right'}) — click a structure to attach. Right‑click or Esc to cancel.`);
+  }
+}
+
+
+function clearDockIntent(){
+  dockIntent = null;
+}
+
+function tryCompleteGrapple(obj){
+  if (!dockIntent) return false;
+
+  const host = dockIntent.host;
+
+  // Must click a friendly Building that isn't the HQ and isn't already docked
+  const valid =
+    obj &&
+    obj.team === TEAM.FRIEND &&
+    (obj instanceof Building) &&
+    !(obj instanceof HQ) &&
+    !obj.parent;
+
+  // Not a valid target: do NOT consume the click (let normal selection happen)
+  if (!valid) return false;
+
+  // CASE A: Host is HQ → use its spike
+  if (host instanceof HQ && Number.isInteger(dockIntent.spikeIndex)) {
+    const sp = host.spikes?.[dockIntent.spikeIndex];
+    if (sp && typeof sp.startGrapple === 'function') {
+      sp.startGrapple(obj);          // begins pulling
+      dockIntent = null;
+      if (typeof renderActions === 'function') renderActions();
+      return true;
+    }
+    // fallthrough to not consume if no spike
+    return false;
+  }
+
+  // CASE B: Host is Dock → use its side ('L' or 'R')
+  if (host instanceof Dock && (dockIntent.which === 'L' || dockIntent.which === 'R')) {
+    if (typeof host.startGrapple === 'function') {
+      host.startGrapple(obj, dockIntent.which);  // begins pulling on that side
+      dockIntent = null;
+      if (typeof renderActions === 'function') renderActions();
+      return true;
+    }
+    return false;
+  }
+
+  // Unknown host → don’t consume the click
+  return false;
+}
+
+
+// ==== single global keydown listener (no nesting) ====
+window.addEventListener('keydown', (e) => {
+  // ignore while typing
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+
+  keys[e.code] = true; // mark key as held
+
+  const code = e.code;           // 'KeyQ', 'Digit1', etc.
+  const k = e.key.toLowerCase(); // 'q', '1', etc.
+
+  // existing keys you already had
+  if (code === 'KeyB') toggleBuildHint();
+  if (code === 'KeyH') helpVisible = !helpVisible;
+  if (code === 'KeyC') {
+    const btn = document.getElementById('btnToggleCfg');
+    if (btn) setConfigCollapsed(btn.textContent === 'Hide');
+  }
+  if (code === 'Escape' && dockIntent) { dockIntent = null; renderActions(); }
+
+  // selection hotkeys (your existing logic)
+  if (code === "Digit1") {
+    if (hq && !hq.dead) selectSet([hq]);
+  }
+  if (code === "Digit2") {
+    const workers = objects.units.filter(u => (u instanceof Worker) && !u.dead);
+    if (workers.length) {
+      const rand = workers[Math.floor(Math.random() * workers.length)];
+      selectSet([rand]);
+    }
+  }
+
+  // NEW: Q = Train Worker (reuses the same function as the button)
+  if (k === 'q') {
+  // ✅ only fire if HQ is the selected unit
+  if (selected === hq && hq && !hq.dead) {
+    trainWorkerAction();
+    e.preventDefault();
+  }
+}
+
+});
+
+
+// === unified keydown handler ===
+window.addEventListener('keydown', (e)=>{
+  // 1) if a grapple/dock is armed, Esc cancels it and stops here
+  if (e.key === 'Escape' && dockIntent){
+    dockIntent = null; // or however you clear "armed" state
+    // optional: show a small hint/toast here
+    updateUIVisibility();
+    return;
+  }
+
+  // 2) if not arming a dock, Esc toggles pause
+  if (e.key === 'Escape'){
+    if (GAME_STATE === 'playing') GAME_STATE = 'paused';
+    else if (GAME_STATE === 'paused') GAME_STATE = 'playing';
+    updateUIVisibility();
+    return;
+  }
+
+  // 3) ...your other keybinds go below (WASD, etc.)
+});
+
+
+ 
+window.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
+
+// Mouse input
+canvas.addEventListener('mousedown', (e)=>{
+    if(GAME_STATE !=='playing') return;
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
+  mouse.wx = mouse.x + camera.x;   mouse.wy = mouse.y + camera.y;
+
+  if (e.button === 0){
+    mouse.down = true;
+
+    // if click starts on a friendly, do immediate (single) selection or shift-toggle
+    const hit = pickFriendly(mouse.wx, mouse.wy);
+
+    // If HQ spike grapple is armed, try to complete it with this click.
+    if (typeof tryCompleteGrapple === 'function' && tryCompleteGrapple(hit)) return;
+
+
+    if (hit){
+      if (e.shiftKey) toggleSelection(hit);
+      else selectSet([hit]);
+    } else {
+      // start marquee box
+      marquee.active = true;
+      marquee.sx = mouse.wx; marquee.sy = mouse.wy;
+      marquee.x  = mouse.wx; marquee.y  = mouse.wy;
+      marquee.shift = e.shiftKey;
+      marquee.base = selection.slice();
+    }
+  }
+
+  if (e.button === 2){
+    mouse.rdown = true;
+    onRightClick(e); // unchanged signature
+  }
+});
+
+canvas.addEventListener('mousemove', (e)=>{
+  if (GAME_STATE !=='playing') return;
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
+  mouse.wx = mouse.x + camera.x;   mouse.wy = mouse.y + camera.y;
+
+  if (marquee.active){
+    marquee.x = mouse.wx; marquee.y = mouse.wy;
+  }
+});
+
+canvas.addEventListener('mouseup', (e)=>{
+  if (GAME_STATE !=='playing') return;
+ 
+  if (e.button === 0){
+    mouse.down = false;
+
+    if (marquee.active){
+      // commit marquee selection
+      // commit marquee selection
+const minx = Math.min(marquee.sx, marquee.x), maxx = Math.max(marquee.sx, marquee.x);
+const miny = Math.min(marquee.sy, marquee.y), maxy = Math.max(marquee.sy, marquee.y);
+const w = Math.abs(maxx - minx), h = Math.abs(maxy - miny);
+
+// small click? treat as no-op (single-click was handled on mousedown)
+if (w > 6 && h > 6){
+  // 1) units only
+  const hitsUnits = [];
+for (const e of objects.units){
+  if (e.dead) continue;
+  if (e.selectable === false) continue; // skip spikes
+  if (e.x >= minx && e.x <= maxx && e.y >= miny && e.y <= maxy){
+    hitsUnits.push(e);
+  }
+}
+
+
+  // 2) keep only one type (prefers Workers > Soldiers > Player > Spike)
+  const filtered = filterToDominantType(hitsUnits);
+
+  if (marquee.shift){
+    // shift‑drag merges with current selection baseline, but still units-only
+    clearSelection();
+    for (const b of marquee.base){ if (b && !b.dead){ b.sel = true; selection.push(b); } }
+    for (const e2 of filtered){
+      const i = selection.indexOf(e2);
+      if (i>=0){ e2.sel=false; selection.splice(i,1); }
+      else { e2.sel=true; selection.push(e2); }
+    }
+  } else {
+    selectSet(filtered);
+  }
+}
+
+    marquee.active = false;
+    renderActions();
+
+    }
+  }
+
+  if (e.button === 2){
+    mouse.rdown = false;
+  }
+});
+
+
+canvas.addEventListener('contextmenu', (e)=>e.preventDefault());
+
+function onLeftClick(){ // select entity
+  const hit = pickFriendly(mouse.wx, mouse.wy);
+
+
+  // If a spike “Grapple” is armed, try to complete it with this clicked target
+if (dockIntent){
+  if (tryCompleteGrapple(hit)) return; // handled (consumed the click)
+}
+  if(hit){ select(hit); return; }
+  // otherwise: if in build ghost, ignore left (use right-click for place). Left could be future alt action.
+}
+
+//universal move helper
+function orderMoveSelectedTo(x, y){
+  // build a list from multi-select or single 'selected'
+  const list = Array.isArray(selection) && selection.length
+    ? selection.slice()
+    : (selected ? [selected] : []);
+
+  for (const u of list){
+    if (!u || u.dead) continue;
+    if (u instanceof Worker || u instanceof Soldier){
+      // manual move cancels autos
+      if ('autoMine' in u)   u.autoMine = false;
+      if ('autoRepair' in u) u.autoRepair = false;
+
+      u.moveTo = { x, y };
+      if (u instanceof Worker){
+        u.state = 'idle';
+        u.targetRes = null;
+        u.repairTarget = null;
+      }
+    }
+    if (u instanceof HQ){
+      u.moveTo = { x, y };
+    }
+  }
+}
+
+function onRightClick(){
+  // Build placement stays the same
+  if (buildMode.active && buildMode.by){
+    const type = buildMode.type;
+    const B = tryPlaceBuilding(type, mouse.wx, mouse.wy, buildMode.by);
+    if (B){ buildMode.active=false; buildMode.type=null; renderActions(); }
+    return;
+  }
+
+  // ===== GROUP ORDERS =====
+  if (Array.isArray(selection) && selection.length > 1){
+    const friends = selection.filter(e => e && !e.dead);
+
+    // Right‑click a resource → all selected Workers mine it
+    const res = pickResource(mouse.wx, mouse.wy);
+    if (res){
+      for (const w of friends){
+        if (w instanceof Worker){
+          w.state      = 'mining';
+          w.targetRes  = res;
+          w.moveTo     = null;
+        }
+      }
+      return;
+    }
+
+    // Right‑click a friendly → assign selected Workers to repair it
+    const hit = pickFriendly(mouse.wx, mouse.wy);
+    if (hit && hit.team === TEAM.FRIEND){
+      for (const w of friends){
+        if (w instanceof Worker){
+          w.autoRepair   = true;
+          w.autoMine     = false;   // cancel auto‑mine if any
+          w.state        = 'repair';
+          w.repairTarget = hit;
+          w.moveTo       = null;
+        }
+      }
+      return;
+    }
+
+    // Otherwise: group move with small ring spread
+    const cx = mouse.wx, cy = mouse.wy;
+    const N = friends.length;
+    const radius = Math.min(60 + 8*N, 160);
+    for (let i=0; i<N; i++){
+      const e = friends[i];
+      const ang = (i / N) * TAU;
+      const tx = cx + Math.cos(ang) * radius * 0.6;
+      const ty = cy + Math.sin(ang) * radius * 0.6;
+      if (e instanceof Worker || e instanceof Soldier){
+        e.moveTo = { x: tx, y: ty };
+        if (e instanceof Worker){
+          e.state     = 'idle';   // ensure it's a move, not mine
+          e.targetRes = null;
+        }
+      }
+    }
+    return;
+  }
+
+  // ===== SINGLE‑SELECTION ORDERS =====
+  if (selected instanceof Worker){
+    // Clicked a resource → mine (autoMine ON, autoRepair OFF)
+    const res = pickResource(mouse.wx, mouse.wy);
+    if (res){
+      selected.autoMine    = true;
+      selected.autoRepair  = false;
+      selected.state       = 'mining';
+      selected.targetRes   = res;
+      selected.moveTo      = null;
+      return;
+    }
+
+    // Unfinished building → resume construction (takes precedence over repair)
+    const bld = pickFriendly(mouse.wx, mouse.wy);
+    if (bld && bld instanceof Building && !bld.active){
+      selected.autoMine   = false;
+      selected.autoRepair = false;
+      selected.state      = 'building';
+      selected.buildSite  = bld;
+      selected.moveTo     = { x: bld.x, y: bld.y };
+      return;
+    }
+
+    // Friendly building → repair (autoRepair ON, autoMine OFF)
+    if (bld && bld.team === TEAM.FRIEND && bld instanceof Building){
+      selected.autoRepair  = true;
+      selected.autoMine    = false;
+      selected.state       = 'repair';
+      selected.repairTarget= bld;
+      selected.moveTo      = null;
+      return;
+    }
+
+    // Ground move: cancel autos and go
+    selected.autoMine   = false;
+    selected.autoRepair = false;
+    selected.moveTo     = { x: mouse.wx, y: mouse.wy };
+    selected.state      = 'idle';
+    return;
+  }
+
+  if (selected instanceof Soldier){
+    selected.moveTo = { x: mouse.wx, y: mouse.wy };
+    return;
+  }
+
+  if (selected instanceof HQ){
+    // allow HQ move by right‑click
+    selected.moveTo = { x: mouse.wx, y: mouse.wy };
+    return;
+  }
+}
+
+function pickFriendly(x,y){
+  const all = [...objects.units, ...objects.buildings];
+  let best = null, bd = 1e9;
+  for (const e of all){
+    if (e.dead) continue;
+    if (e.selectable === false) continue; // skip spikes etc.
+    if (pointInCircle(x,y, e.x,e.y, e.r+6)){
+      const d = (x-e.x)**2 + (y-e.y)**2;
+      if (d < bd){ bd = d; best = e; }
+    }
+  }
+  return best;
+}
+
+function pickResource(x, y){
+  let best = null, bestD = Infinity;
+  for (const r of objects.resources){
+    if (!r || r.dead) continue;
+    // enlarge pick radius a touch so it’s easy to click
+    if (pointInCircle(x, y, r.x, r.y, (r.r || 14) + 6)){
+      const d = (x - r.x) * (x - r.x) + (y - r.y) * (y - r.y);
+      if (d < bestD){ bestD = d; best = r; }
+    }
+  }
+  return best;
+}
+
+
+
+
+function select(obj){
+  if (selected) selected.sel = false;
+  selected = obj;
+  if (selected) selected.sel = true;
+
+  // Remember last-picked building for spike UI ("Grapple Selected")
+  if (selected instanceof Building && !(selected instanceof HQ)) {
+    lastPickedBuilding = selected;
+  }
+
+  renderActions();
+}
+
+// ===================== Build System =====================
+function canAfford(cost){ return resources>=cost; }
+function spend(cost){ resources-=cost; }
+
+function tryPlaceBuilding(type, x,y, worker){
+  const S = CFG.structures;
+  const def = {
+    barracks: { cls:Barracks, cost:S.barracks.cost },
+    mg:       { cls:MGTurret, cost:S.mg.cost },
+    shotgun:  { cls:ShotgunTurret, cost:S.shotgun.cost },
+    slow:     { cls:SlowTurret, cost:S.slow.cost },
+    drone:    { cls:DroneTurret, cost:S.drone.cost },
+    tech:     { cls:Tech, cost:S.tech.cost },
+    wall:     { cls:Wall, cost:S.wall.cost },
+    dock:     { cls:Dock, cost:S.dock.cost },
+    laser:   { cls: LaserTurret, cost:S.laser.cost },
+    missile:  { cls: MissileRackTurret, cost: S.missile.cost },
+
+
+  }[type];
+  
+  if(!def) return null;
+  if(!canAfford(def.cost)) return null;
+
+  // placement checks
+  const tempTest = new def.cls(x,y);
+  for(const b of objects.buildings){
+    if(!b.dead && circleOverlap(x,y,tempTest.r+4, b.x,b.y,b.r+6)) return null;
+  }
+
+  // spend & create blueprint (inactive)
+  spend(def.cost);
+  const B = new def.cls(x,y);
+  B.active = false;
+  B.buildProgress = 0;
+
+  
+
+  const bt = 
+  (def && typeof def.buildTime === 'number') ? def.buildTime :
+  (CFG?.structures?.[type]?.buildTime ?? null);
+
+  if (bt != null){
+    const speed = (CFG.worker?.buildSpeed ?? 100)
+    B.requiredBuild = Math.max(1, bt * speed);
+  }
+  B._baseRequiredBuild = B.requiredBuild ?? (B._baseRequiredBuild ?? 100); // remember for repair
+  
+  objects.buildings.push(B);
+
+  // assign to worker (queue-aware)
+  if (worker instanceof Worker){
+    const canQueue = (CFG.qol?.allowQueueBuilds ?? true);
+    if (worker.state === 'building' && canQueue){
+      worker.enqueueBuild(B);
+    } else {
+      worker.state = 'building';
+      worker.buildSite = B;
+      worker.moveTo = { x, y };
+    }
+  }
+  return B;
+}
+
+
+function spawnWorkerNear(x,y){ const ang=Math.random()*TAU; const d=70; const w=new Worker(x+Math.cos(ang)*d, y+Math.sin(ang)*d); objects.units.push(w); }
+function spawnSoldierNear(x,y){ const ang=Math.random()*TAU; const d=70; const s=new Soldier(x+Math.cos(ang)*d, y+Math.sin(ang)*d); objects.units.push(s); }
+
+function respawnCommanderNear(x, y){
+  const ang = Math.random() * TAU;
+  const d   = 70;
+  const p   = new Player(x + Math.cos(ang)*d, y + Math.sin(ang)*d);
+  objects.units.push(p);
+  player = p;
+  select(player); // focus the new commander
+}
+
+// === Top-level (outside renderActions) ===
+function trainWorkerAction() {
+  if (!hq || hq.dead) return;
+  if (canAfford(CFG.worker.cost)) {
+    spend(CFG.worker.cost);
+    selected.queue++;
+  }
+}
+
+
+// ===================== UI (Selection Actions) =====================
+const panel = document.getElementById('panel');
+const selTitle = document.getElementById('selTitle');
+const actions = document.getElementById('actions');
+
+function renderActions(){
+  if(!selected || selected.dead){ panel.hidden = true; return; }
+  panel.hidden = false;
+  actions.innerHTML = '';
+
+  // ===== MULTI‑SELECT PANEL (added) =====
+  if (Array.isArray(selection) && selection.length > 1){
+    selTitle.textContent = `Group – ${selection.length} Selected`;
+
+    // summary
+    const summary = document.createElement('div');
+    summary.className = 'small';
+    const wc = selection.filter(e => e instanceof Worker).length;
+    const sc = selection.filter(e => e instanceof Soldier).length;
+    const bc = selection.filter(e => e instanceof Building).length;
+    summary.textContent = `Workers: ${wc} • Soldiers: ${sc} • Buildings: ${bc}`;
+    actions.appendChild(summary);
+
+    const row = document.createElement('div'); 
+    row.className = 'row';
+
+    // Bulk: Select all Workers
+    const selWorkers = document.createElement('button');
+    selWorkers.className = 'btn';
+    selWorkers.textContent = 'Select Workers';
+    selWorkers.onclick = ()=>{
+      clearSelection();
+      for(const e of selection){ if(e instanceof Worker) { e.sel = true; selection.push(e); } }
+      renderActions();
+    };
+    row.appendChild(selWorkers); 
+    // Bulk: Select all Soldiers
+    const selSoldiers = document.createElement('button');
+    selSoldiers.className = 'btn';
+    selSoldiers.textContent = 'Select Soldiers';
+    selSoldiers.onclick = ()=>{
+      clearSelection();
+      for(const e of selection){ if(e instanceof Soldier) { e.sel = true; selection.push(e); } }
+      renderActions();
+    };
+    row.appendChild(selSoldiers);
+
+    // Bulk: Auto‑Mine OFF
+    const mineOff = document.createElement('button');
+    mineOff.className = 'btn';
+    mineOff.textContent = 'Workers: Auto‑Mine OFF';
+    mineOff.onclick = ()=>{
+      for(const e of selection){ if(e instanceof Worker) e.autoMine = false; }
+      renderActions();
+    };
+    row.appendChild(mineOff);
+
+    // Bulk: Auto‑Repair toggle (only if globally allowed)
+    if (CFG.qol?.allowRepair){
+      const repOn = document.createElement('button');
+      repOn.className = 'btn';
+      repOn.textContent = 'Workers: Auto‑Repair ON';
+      repOn.onclick = ()=>{
+        for(const e of selection){ if(e instanceof Worker) e.autoRepair = true; }
+        renderActions();
+      };
+      row.appendChild(repOn);
+
+      const repOff = document.createElement('button');
+      repOff.className = 'btn';
+      repOff.textContent = 'Workers: Auto‑Repair OFF';
+      repOff.onclick = ()=>{
+        for(const e of selection){ if(e instanceof Worker) e.autoRepair = false; }
+        renderActions();
+      };
+      row.appendChild(repOff);
+    }
+
+    // Bulk: Clear build queues
+    const clearQ = document.createElement('button');
+    clearQ.className = 'btn';
+    clearQ.textContent = 'Workers: Clear Queues';
+    clearQ.onclick = ()=>{
+      for(const e of selection){ if(e instanceof Worker && Array.isArray(e.buildQueue)) e.buildQueue.length = 0; }
+      renderActions();
+    };
+    row.appendChild(clearQ);
+
+    actions.appendChild(row);
+
+    const tip=document.createElement('div'); 
+    tip.className='small';
+    tip.textContent='Right‑click: group move • Right‑click a resource: all selected Workers mine it.';
+    actions.appendChild(tip);
+
+    return; // important: don’t fall through to single‑selection panels
+  }
+
+  // ----- Worker -----
+  if (selected instanceof Worker){
+    selTitle.textContent='Worker – Actions';
+
+    const b = document.createElement('div'); 
+    b.className='grid';
+    [['Barracks','barracks'],['MG Turret','mg'],['Shotgun Turret','shotgun'],['Laser Turret','laser'],['Missile Turret','missile'],
+     ['Slow Turret','slow'],['Drone Turret','drone'],['Tech Building','tech'],['Wall','wall'], ['Dock','dock']]
+      .forEach(([label,type])=>{
+        const btn=document.createElement('button');
+        btn.className='btn';
+        btn.textContent=label + ` ($${getCost(type)})`;
+        btn.onclick=()=>{ buildMode.active=true; buildMode.type=type; buildMode.by=selected; };
+        b.appendChild(btn);
+      });
+    actions.appendChild(b);
+
+    const row = document.createElement('div'); row.className='row';
+
+    const autoMineBtn = document.createElement('button');
+    autoMineBtn.className='btn';
+    const renderMine = ()=> autoMineBtn.textContent = `Auto‑Mine: ${selected.autoMine ? 'ON' : 'OFF'}`;
+    renderMine();
+    autoMineBtn.onclick = ()=>{ selected.autoMine = !selected.autoMine; renderMine(); };
+    row.appendChild(autoMineBtn);
+
+    if(CFG.qol?.allowRepair){
+      const autoRepairBtn = document.createElement('button');
+      autoRepairBtn.className='btn';
+      const renderRepair = ()=> autoRepairBtn.textContent = `Auto‑Repair: ${selected.autoRepair ? 'ON' : 'OFF'}`;
+      renderRepair();
+      autoRepairBtn.onclick = ()=>{ selected.autoRepair = !selected.autoRepair; renderRepair(); };
+      row.appendChild(autoRepairBtn);
+    }
+
+    const qInfo = document.createElement('div'); qInfo.className='small';
+    const qLen = Array.isArray(selected.buildQueue) ? selected.buildQueue.length : 0;
+    qInfo.textContent = ` Queue: ${qLen}`;
+    row.appendChild(qInfo);
+
+    if(qLen > 0){
+      const clearBtn = document.createElement('button');
+      clearBtn.className='btn';
+      clearBtn.textContent='Clear Queue';
+      clearBtn.onclick = ()=>{ selected.buildQueue.length = 0; renderActions(); };
+      row.appendChild(clearBtn);
+    }
+
+    actions.appendChild(row);
+
+    const tip=document.createElement('div'); tip.className='small';
+    tip.textContent='Right‑click to place (Build), right‑click resource to Mine, right‑click damaged building to Repair, right‑click ground to Move.';
+    actions.appendChild(tip);
+
+  } else if (selected instanceof HQ) { 
+  selTitle.textContent = 'Mothership – Command';
+
+  // Row: Train Worker
+const row1 = document.createElement('div');
+row1.className = 'row';
+
+const trainBtn = document.createElement('button');
+trainBtn.className = 'btn';
+trainBtn.textContent = `Train Worker ($${CFG.worker.cost})`;
+
+// Hook button
+trainBtn.onclick = trainWorkerAction;
+row1.appendChild(trainBtn);
+
+// Queue display
+const q = document.createElement('div');
+q.className = 'small';
+q.textContent = `Queue: ${selected.queue}`;
+row1.appendChild(q);
+
+actions.appendChild(row1);
+
+
+  // Move hint
+  const row2 = document.createElement('div');
+  row2.className = 'small';
+  row2.textContent = 'Tip: With HQ selected, right‑click ground to relocate.';
+  actions.appendChild(row2);
+
+  // Respawn Commander
+  const row3 = document.createElement('div');
+  row3.className = 'row';
+  const cost = (CFG.player && CFG.player.respawnCost) ? CFG.player.respawnCost : 200;
+  const canRespawn = (!player || player.dead || player.hp<=0);
+  const respawnBtn = document.createElement('button');
+  respawnBtn.className = 'btn';
+  respawnBtn.textContent = `Respawn Commander ($${cost})`;
+  respawnBtn.disabled = !canRespawn || !canAfford(cost);
+  respawnBtn.onclick = ()=>{
+    if (!canRespawn) return;
+    if (canAfford(cost)) {
+      spend(cost);
+      respawnCommanderNear(selected.x, selected.y);
+      renderActions();
+    }
+  };
+  row3.appendChild(respawnBtn);
+  actions.appendChild(row3);
+  
+  // ---- Docking Spikes (arm a spike, then click a building) ----
+{
+  const title = document.createElement('div');
+  title.className = 'small';
+  title.textContent = 'Docking Spikes';
+  actions.appendChild(title);
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+
+  for (let i = 0; i < 6; i++){
+    const wrap = document.createElement('div');
+
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    
+// remap visual order → original index
+const order = [4, 5, 3, 0, 2, 1]; 
+const idx = order[i];
+
+const labels = ['Center-Right','Lower-Right','Lower-Left','Center-Left','Top-Left','Top-Right'];
+const lab = labels[idx] || ('Spike ' + (idx+1));
+btn.innerHTML = `Grapple<br>(${lab})`; 
+    btn.style.marginTop = '6px';
+    btn.style.width = '100%'; // full width for better click area
+
+  
+btn.onclick = () => { setDockIntent(selected, idx); };
+
+    wrap.appendChild(btn);
+
+    const rel = document.createElement('button');
+    rel.className = 'btn';
+    rel.textContent = 'Release';
+    rel.style.marginTop = '6px';
+    rel.onclick = () => {
+    const sp = (typeof spikes!=='undefined') ? spikes[idx] : null;  // ← use idx
+    sp && sp.release && sp.release();
+    renderActions();
+    };
+
+    wrap.appendChild(rel);
+
+    grid.appendChild(wrap);
+  }
+
+  actions.appendChild(grid);
+
+  const tip = document.createElement('div');
+  tip.className = 'small';
+  tip.textContent = 'Click a Grapple button, then click a friendly structure to attach to that spike.';
+  actions.appendChild(tip);
+}
+
+  } else if (selected instanceof Dock) {
+    selTitle.textContent = 'Dock – Actions';
+    const row = document.createElement('div'); row.className='row';
+
+    // Left Dock
+    const leftBtn = document.createElement('button');
+    leftBtn.className = 'btn';
+    leftBtn.textContent = 'Left Dock: Arm Grapple';
+    leftBtn.onclick = () => { setDockIntentDock(selected, 'L'); };
+    row.appendChild(leftBtn);
+
+    // Right Dock
+    const rightBtn = document.createElement('button');
+    rightBtn.className = 'btn';
+    rightBtn.textContent = 'Right Dock: Arm Grapple';
+    rightBtn.onclick = () => { setDockIntentDock(selected, 'R'); };
+    row.appendChild(rightBtn);
+
+    actions.appendChild(row);
+    const extendArm = document.createElement('div'); extendArm.className='small';
+    extendArm.textContent = 'Right‑click a friendly structure to attach the docked spike.';
+    actions.appendChild(extendArm);
+
+// Release buttons
+const relRow = document.createElement('div');
+relRow.style.marginTop = '6px';
+
+const relL = document.createElement('button');
+relL.className = 'btn';
+relL.textContent = 'Release Left';
+relL.onclick = ()=>{
+  if (selected && typeof selected.release === 'function'){
+    selected.release('L');
+    clearDockIntent?.();
+    renderActions();
+  }
+};
+
+const relR = document.createElement('button');
+relR.className = 'btn';
+relR.style.marginLeft = '8px';
+relR.textContent = 'Release Right';
+relR.onclick = ()=>{
+  if (selected && typeof selected.release === 'function'){
+    selected.release('R');
+    clearDockIntent?.();
+    renderActions();
+  }
+};
+
+relRow.appendChild(relL);
+relRow.appendChild(relR);
+actions.appendChild(relRow);
+
+  
+
+  }  else if (selected instanceof Barracks) {
+    selTitle.textContent='Barracks – Train';
+    const btn=document.createElement('button'); btn.className='btn';
+    btn.textContent=`Train Soldier ($${CFG.soldier.cost})`;
+    btn.onclick=()=>{ if(canAfford(CFG.soldier.cost)){ spend(CFG.soldier.cost); spawnSoldierNear(selected.x, selected.y); } };
+    actions.appendChild(btn);
+
+  } else if (selected instanceof Tech) {
+    selTitle.textContent='Tech – Research';
+    const g=document.createElement('div'); g.className='grid';
+    makeUpgradeButton(g,'Player DMG','playerDamage');
+    makeUpgradeButton(g,'Player FireRate','playerFireRate');
+    makeUpgradeButton(g,'Unit HP','unitHealth');
+    makeUpgradeButton(g,'Turret DMG','turretDamage');
+    makeUpgradeButton(g,'Global DMG','globalDamage');
+    makeUpgradeButton(g,'Worker Mine Speed','workerMineRate');
+    makeUpgradeButton(g,'Worker Capacity','workerCarryCap');
+    actions.appendChild(g);
+    const note=document.createElement('div'); note.className='small';
+    note.textContent='Each research adds a % step. Scales costs per level.';
+    actions.appendChild(note);
+
+  } else if (selected instanceof MGTurret) { selTitle.textContent='MG Turret'; drawSimpleInfo();
+  } else if (selected instanceof ShotgunTurret) { selTitle.textContent='Shotgun Turret'; drawSimpleInfo();
+  } else if (selected instanceof LaserTurret) { selTitle.textContent='Laser Turret'; drawSimpleInfo();
+  } else if (selected instanceof MissileRackTurret) { selTitle.textContent='Missile Rack Turret'; drawSimpleInfo();
+  } else if (selected instanceof SlowTurret) { selTitle.textContent='Slow Turret'; drawSimpleInfo();
+  } else if (selected instanceof DroneTurret) { selTitle.textContent='Drone Turret'; drawSimpleInfo();
+  } else if (selected instanceof Wall) { selTitle.textContent='Wall'; drawSimpleInfo();
+  } else if (selected instanceof Soldier) {
+    selTitle.textContent='Soldier – Orders';
+    const tip=document.createElement('div'); tip.className='small';
+    tip.textContent='Right‑click ground to Move. Auto‑attacks enemies.';
+    actions.appendChild(tip);
+  } else if (selected instanceof Building) {
+    selTitle.textContent='Building – Actions';
+    const btn=document.createElement('button'); btn.className='btn';
+    btn.textContent=`Demolish ($${CFG.structures.demolishRefund})`;
+    btn.onclick=()=>{ if(canAfford(CFG.structures.demolishRefund)){ spend(CFG.structures.demolishRefund); selected.dead=true; } };
+    actions.appendChild(btn);
+
+  }else if (selected instanceof Player) {
+    selTitle.textContent='Player';
+    const tip=document.createElement('div'); tip.className='small';
+    tip.innerHTML='Hold <span class="kbd">Space</span> to fire. WASD to move.';
+    actions.appendChild(tip);
+  }
+
+  function drawSimpleInfo(){
+    const info=document.createElement('div'); info.className='small';
+    info.innerHTML=`HP ${Math.ceil(selected.hp)} / ${Math.ceil(selected.maxhp)}`;
+    actions.appendChild(info);
+  }
+}
+
+function selectEntity(entity) {
+  if (!entity) return;
+  selected = [entity];
+  dockIntent = null;
+  selectionBox = null;       // <- mimic click clearing box
+  renderActions();           // <- rebuild HUD
+}
+
+// === HUD Hotkey helper: find a visible HUD action button by label and click it ===
+function triggerHudAction(labelRegex){
+  if (!actions) return false;  // actions[] is built each render
+  const match = actions.find(a => labelRegex.test((a.l||'').toLowerCase()));
+  if (match && typeof match.f === 'function') {
+    match.f();
+    return true;
+  }
+  return false;
+}
+
+function getCost(type){ const S=CFG.structures; return ({barracks:S.barracks.cost, mg:S.mg.cost, shotgun:S.shotgun.cost, laser:S.laser.cost, missile:S.missile.cost, slow:S.slow.cost, drone:S.drone.cost, tech:S.tech.cost, wall:S.wall.cost, dock:S.dock.cost})[type]; }
+
+function makeUpgradeButton(parent, label, key){ const lev = upgrades[key]; const base = CFG.upgrades[key].cost; const cost = Math.round(base * Math.pow(1.35, lev)); const btn=document.createElement('button'); btn.className='btn'; btn.textContent=`${label} +${Math.round(CFG.upgrades[key].step*100)}% ($${cost}) [L${lev}]`;
+  btn.onclick=()=>{ if(canAfford(cost)){ spend(cost); upgrades[key]++; } }; parent.appendChild(btn); }
+
+// ===================== Config UI =====================
+const configArea = document.getElementById('configArea');
+const btnApply = document.getElementById('btnApply');
+const btnReset = document.getElementById('btnReset');
+const btnSaveCfg = document.getElementById('btnSaveCfg');
+const btnLoadCfg = document.getElementById('btnLoadCfg');
+configArea.value = JSON.stringify(CFG, null, 2);
+
+btnApply.onclick = ()=>{ try{ const obj=JSON.parse(configArea.value); CFG=obj; // soft reset things influenced heavily by CFG
+  // Recompute dependent values (do minimal reset to keep current world)
+  document.getElementById('hint').textContent = 'Config applied! Future spawns use new stats.';
+} catch(e){ alert('Invalid JSON in Config: '+e.message); } };
+btnReset.onclick = ()=>{ CFG = JSON.parse(JSON.stringify(DEFAULT_CONFIG)); configArea.value = JSON.stringify(CFG, null, 2); document.getElementById('hint').textContent='Config reset to defaults.'; };
+btnSaveCfg.onclick = ()=>{ localStorage.setItem('miniRTS_config', configArea.value); document.getElementById('hint').textContent='Saved config to localStorage.'; };
+btnLoadCfg.onclick = ()=>{ const v = localStorage.getItem('miniRTS_config'); if(v){ configArea.value=v; btnApply.onclick(); } else { document.getElementById('hint').textContent='No saved config found.'; } };
+
+// --- Config collapse toggle ---
+const btnToggleCfg = document.getElementById('btnToggleCfg');
+const configWrapEl = document.getElementById('configWrap');
+const configBtnsEl = document.getElementById('configBtns');
+const configTipEl  = document.getElementById('configTip');
+function setConfigCollapsed(collapsed){
+  // keep the header & Hide/Show button visible; hide the editor + other buttons
+  document.getElementById('configArea').style.display = collapsed ? 'none' : '';
+  configTipEl.style.display  = collapsed ? 'none' : '';
+  // hide all buttons except the first (the toggle itself)
+  [...configBtnsEl.querySelectorAll('.btn')].forEach((btn, i)=>{
+    if(i===0) return; // leave Hide/Show
+    btn.style.display = collapsed ? 'none' : '';
+  });
+  btnToggleCfg.textContent = collapsed ? 'Show' : 'Hide';
+  localStorage.setItem('miniRTS_cfg_collapsed', collapsed ? '1' : '0');
+}
+// init from saved state
+setConfigCollapsed(localStorage.getItem('miniRTS_cfg_collapsed') === '1');
+// click to toggle
+btnToggleCfg.onclick = ()=> setConfigCollapsed(btnToggleCfg.textContent !== 'Hide');
+
+
+function toggleBuildHint(){ const el=document.getElementById('hint'); el.textContent = (el.textContent.includes('Right‑Click'))? 'Tip: Select HQ to train Workers. Select Tech to research upgrades.' : 'Select a Worker → Build → Right‑Click to place.'; }
+
+// ===================== Waves =====================
+
+// === Wave composition helpers ===
+const WAVE = {
+  baseBudget: 22,        // wave 1 points
+  budgetPerWave: 15,     // points added each wave
+  cost: { grunt: 2,scout: 3, splitter: 4, brute: 7, brood: 19 }
+};
+
+function waveBudget(n){ return WAVE.baseBudget + (n-1)*WAVE.budgetPerWave; }
+
+function weightsForWave(n){
+  if (n <= 2) return { grunt: 1, splitter: 0, brute: 0,scout: 0, brood: 0 };
+  
+  const SCOUT_CADENCE = 5;
+  const scoutWeight = (n >= 3 && (n % SCOUT_CADENCE) === 0) ? 2 : 0;
+  
+  return {
+    grunt:    6,
+    splitter: n >= 3 ? 3 : 0,
+    brute:    n >= 4 ? 2 : 0,
+    brood:    n >= 5 ? 1 : 0,
+    scout: scoutWeight
+  };
+}
+
+// tiny deterministic RNG (nice for debugging / seeded runs)
+function makeRNG(seed=123456789){
+  let s = seed >>> 0;
+  return ()=> (s = (1664525*s + 1013904223) >>> 0, (s & 0xffff) / 0xffff);
+}
+
+// pick by weights
+function pickWeighted(entries, rand){
+  const total = entries.reduce((a,[,w])=>a+w,0);
+  let r = rand()*total;
+  for (const [v,w] of entries){ if ((r-=w) <= 0) return v; }
+  return entries[0][0];
+}
+
+function composeWave(n, seed=Date.now()){
+  const rand   = makeRNG(seed ^ (n*0x9e3779b9));
+  const budget = waveBudget(n);
+  const w = Object.entries(weightsForWave(n)).filter(([,wt])=>wt>0);
+
+  const caps  = { brood: Math.min(1 + Math.floor(n/8), 2) };
+  const count = { grunt:0, splitter:0, brute:0, scout:0, brood:0 };
+  const list = [];
+  let pts = budget, safety=1000;
+
+  while (pts > 0 && safety-- > 0){
+    let t = pickWeighted(w, rand);
+    if (t === 'brood' && count.brood >= caps.brood) t = 'brute';
+    const c = WAVE.cost[t] || 1;
+    if (c > pts){
+      if (pts >= WAVE.cost.grunt) t = 'grunt';
+      else break;
+    }
+    list.push(t);
+    count[t]++; pts -= WAVE.cost[t];
+  }
+  return list; // e.g. ["grunt","splitter","brute",...]
+}
+
+// Per-wave HP growth (percent per wave)
+// Default stays 4%; Brute gets a bigger slope (e.g., 8%)
+const HP_GROWTH = {
+  default: 0.04,
+  brute:   0.08
+};
+
+
+function getStatsFor(type, n){
+  const hpBase = { grunt: 80, splitter: 180, brute: 320, scout: 120, brood: 1000 };
+  const spd    = { grunt: 70, splitter: 50, brute: 70, scout: 90,  brood: 26  };
+  const dmg    = { grunt: 10, splitter: 25, brute: 50, scout: 4,   brood: 100 };
+  const rad    = { grunt: 11, splitter: 14, brute: 18, scout: 9,   brood: 70  }; // <-- new map for radius
+
+  const scale = 1 + (n-1)*0.03; // +3% per wave
+  return {
+    hp: Math.round((hpBase[type]||16) * scale),
+    speed: spd[type] || 36,
+    dmg: Math.round((dmg[type]||4) * scale),
+    r: rad[type] || 10,  // <-- NEW field, brood now has r:20
+  };
+}
+
+let waveIndex = 0; 
+ 
+// Pick a safe spawn around the HQ ring
+function pickSpawnPoint(){
+  const R   = CFG.waves?.spawnRadius || 1400;
+  const pad = 40;                  // keep off walls/structures a bit
+  const tries = 12;
+
+  for (let i = 0; i < tries; i++){
+    const ang = Math.random() * TAU;
+    const r   = R + (Math.random()-0.5) * 120; // a little jitter
+    const x   = hq.x + Math.cos(ang) * r;
+    const y   = hq.y + Math.sin(ang) * r;
+
+    // quick overlap check vs buildings so they don't spawn inside stuff
+    let ok = true;
+    for (const b of objects.buildings){
+      if (!b || b.dead) continue;
+      if (circleOverlap(x, y, pad, b.x, b.y, b.r + 8)) { ok = false; break; }
+    }
+    if (ok) return { x, y };
+  }
+  // fallback (shouldn’t really happen)
+  return { x: hq.x + R, y: hq.y };
+}
+
+function spawnWave(){
+  // Advance the existing wave counter you already have
+  wave = (typeof wave === 'number') ? (wave + 1) : 1;
+
+  // Build base composition
+  const baseComp = composeWave(wave, (CFG?.seed ?? 1337));
+
+  // Apply rollover (if helpers exist), else use baseComp
+  let mix = baseComp;
+  let carryUsed = 0;
+  if (typeof applyCarryRollover === 'function') {
+    const rr = applyCarryRollover(wave, baseComp);
+    mix = (rr && rr.list) ? rr.list : baseComp;
+    carryUsed = (rr && rr.carryUsed) ? rr.carryUsed : 0;
+  }
+
+  // Spawn enemies
+  for (const t of mix){
+    const sp    = pickSpawnPoint();
+    const stats = getStatsFor(t, wave); // keep your working stats getter
+    objects.enemies.push(new Enemy(sp.x, sp.y, stats, t)); // t: 'grunt'|'splitter'|'brute'|'brood'|...
+  }
+
+  // Finalize rollover state for next wave (if helper exists)
+  if (typeof finalizeRollover === 'function') {
+    finalizeRollover(wave, mix, carryUsed);
+  }
+}
+
+
+
+
+// ===================== Update / Draw Loop =====================
+let last=performance.now();
+function loop(now){ const dt=Math.min(0.033, (now-last)/1000); last=now; if(!alive) return;
+
+// --- MAIN MENU GUARD: draw menu and skip world updates ---
+if (GAME_STATE === "menu") {
+  // keep UI clean while on menu
+  if (selected) { 
+  selected = null; 
+  renderActions?.();    // rebuild the right panel empty
+  }
+  updateUIVisibility?.(); // enforces HUD/panels hidden in menu
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawMainMenu(ctx);
+  requestAnimationFrame(loop);
+  return; // <-- don't run the rest of loop while in menu
+}
+
+// --- PAUSE GUARD: draw frozen world + overlay, skip updates ---
+if (GAME_STATE === 'paused') {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawGrid();
+
+  // draw world (no updates)
+  for (const r of objects.resources)   r.draw(ctx);
+  for (const b of objects.buildings) { b.draw(ctx); /* drawHpBar(b); */ }
+  for (const u of objects.units)     { u.draw(ctx); /* drawHpBar(u); */ }
+  for (const e of objects.enemies)     e.draw(ctx);
+  for (const p of objects.projectiles) p.draw(ctx);
+  for (const fx of objects.effects)    fx.draw(ctx);
+
+  // overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Paused', canvas.width/2, canvas.height/2);
+  ctx.textAlign = 'left';
+
+  requestAnimationFrame(loop);
+  return;
+}
+
+
+// after the MENU guard
+if (GAME_STATE === 'paused') {
+  // draw the world dimmed + "Paused" banner
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawGrid();
+
+  // (reuse your existing draw section quickly)
+  for(const r of objects.resources){ r.draw(ctx); }
+  for(const b of objects.buildings){ b.draw(ctx); /* drawHpBar(b); */ }
+  for(const u of objects.units){ u.draw(ctx); /* drawHpBar(u); */ }
+  for(const e of objects.enemies){ e.draw(ctx); }
+  for(const p of objects.projectiles){ p.draw(ctx); }
+  for(const fx of objects.effects){ fx.draw(ctx); }
+
+  // overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Paused', canvas.width/2, canvas.height/2);
+  ctx.textAlign = 'left';
+
+  requestAnimationFrame(loop);
+  return;
+}
+
+// Detect player death/respawn and switch camera follow
+if (player) {
+  const nowDead = !!player.dead;
+  if (nowDead && !__prevPlayerDead) {
+    setCameraFollow('mothership');   // switched on death
+  } else if (!nowDead && __prevPlayerDead) {
+    setCameraFollow('player');       // switched on respawn
+  }
+  __prevPlayerDead = nowDead;
+}
+
+
+  
+  // Camera follow active target (player or mothership)
+const tgt = getCameraFollowPos();
+camera.x = lerp(camera.x, tgt.x - canvas.width/2, 0.12);
+camera.y = lerp(camera.y, tgt.y - canvas.height/2, 0.12);
+ensureChunksAround(tgt.x, tgt.y);
+
+
+  // Update wave timer
+  waveTimer -= dt; if(waveTimer<=0){ spawnWave(); waveTimer = CFG.waves.period; }
+
+  // Periodic resource spawning
+if (CFG.resourceSpawns?.enabled){
+  resSpawnTimer -= dt;
+  if (resSpawnTimer <= 0){
+    spawnPeriodicResourcesPulse();
+    resSpawnTimer = CFG.resourceSpawns.interval || 15;
+  }
+}
+
+  // Update
+  hq.update(dt);
+  for(const arr of [objects.units, objects.buildings, objects.enemies, objects.projectiles]){
+    for(const o of arr){ if(o.dead) continue; o.update?.(dt); }
+  }
+
+
+// NEW: update beam effects
+for (const fx of objects.effects) { if (!fx.dead) fx.update(dt); }
+
+// Clean dead
+objects.projectiles = objects.projectiles.filter(p=>!p.dead);
+objects.resources   = objects.resources.filter(r=>!r.dead && r.amount>0);
+objects.units       = objects.units.filter(u=>!u.dead);
+objects.enemies     = objects.enemies.filter(e=>!e.dead);
+objects.buildings   = objects.buildings.filter(b=>!b.dead);
+objects.effects     = objects.effects.filter(f=>!f.dead);
+resolveEnemyEnemyCollisions();
+  
+
+  
+  
+
+  // Check lose
+  if(hq.dead){ alive=false; }
+
+  // Draw
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawGrid();
+  // draw resources
+  for(const r of objects.resources){ r.draw(ctx); }
+  // draw buildings (HQ first under)
+  for(const b of objects.buildings){ b.draw(ctx); drawHpBar(b); }
+  // draw units
+  for (const u of objects.units) {
+  u.draw(ctx);
+  if (!(u instanceof MShipSpike)) drawHpBar(u); // hide HP bars on spikes
+  }
+  // draw enemies
+  for(const e of objects.enemies){ e.draw(ctx); }
+  // projectiles
+  for(const p of objects.projectiles){ p.draw(ctx); }
+  drawCompass(ctx);
+
+  function getCameraFollowPos(){
+  // prefer mothership if requested AND valid
+  if (camFollow === 'mothership' && hq && !hq.dead) {
+    return { x: hq.x, y: hq.y };
+  }
+  // otherwise player if valid
+  if (player && !player.dead) {
+    return { x: player.x, y: player.y };
+  } 
+
+
+  // fallback: keep current camera (no jump to origin)
+  return { x: camera.x, y: camera.y };
+}
+
+// NEW: beam effects
+for (const fx of objects.effects) { fx.draw(ctx); }
+
+
+  // Build ghost
+  if(buildMode.active && buildMode.by){ const type=buildMode.type; const temp=getTempBuilding(type, mouse.wx, mouse.wy); let ok = canPlace(temp); ctx.save(); ctx.translate(temp.x-camera.x,temp.y-camera.y); ctx.globalAlpha=0.6; ctx.fillStyle= ok? '#8fff98' : '#ff8f8f'; ctx.beginPath(); ctx.arc(0,0,temp.r,0,TAU); ctx.fill(); ctx.restore(); }
+  
+
+  // HUD
+  updateTopHUD();
+  if(helpVisible) drawHelp();
+
+  requestAnimationFrame(loop);
+
+  // draw marquee rectangle
+if (marquee.active){
+  const minx = Math.min(marquee.sx, marquee.x) - camera.x;
+  const miny = Math.min(marquee.sy, marquee.y) - camera.y;
+  const w = Math.abs(marquee.x - marquee.sx);
+  const h = Math.abs(marquee.y - marquee.sy);
+  ctx.save();
+  ctx.strokeStyle = '#8ad';
+  ctx.setLineDash([6,3]);
+  ctx.strokeRect(minx, miny, w, h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(138,173,255,0.12)';
+  ctx.fillRect(minx, miny, w, h);
+  ctx.restore();
+}
+
+
+}
+requestAnimationFrame(loop);
+
+function drawGrid(){ const s=60; const ox = - (camera.x % s); const oy = - (camera.y % s); ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=1; for(let x=ox; x<canvas.width; x+=s){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); } for(let y=oy; y<canvas.height; y+=s){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); } ctx.restore(); }
+
+function drawHpBar(e){ if(!e.maxhp) return; ctx.save(); ctx.translate(e.x-camera.x, e.y-camera.y); ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(-14, -20, 28, 4); ctx.fillStyle='#86ff9f'; ctx.fillRect(-14, -20, 28*(e.hp/e.maxhp), 4); ctx.restore(); }
+
+function drawCompass(ctx){
+  // hard dependencies we already have
+  if (!player || player.dead || !hq || hq.dead) return;
+
+  // distance check in WORLD space
+  const dx = hq.x - player.x;
+  const dy = hq.y - player.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= COMPASS_THRESHOLD) return; // hide if not far enough
+
+  // direction from player → mothership
+  const ang = Math.atan2(dy, dx);
+
+  // orbit center is player’s SCREEN position
+  const px = player.x - camera.x;
+  const py = player.y - camera.y;
+
+  // arrow position: fixed radius around player in SCREEN space
+  const ax = px + Math.cos(ang) * COMPASS_ORBIT_PX;
+  const ay = py + Math.sin(ang) * COMPASS_ORBIT_PX;
+
+  // draw a small triangle pointing toward mothership
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(ang);
+
+  // simple, light arrow head
+  ctx.beginPath();
+  ctx.moveTo(12, 0);   // tip
+  ctx.lineTo(-8, -6);  // back left
+  ctx.lineTo(-8,  6);  // back right
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fill();
+
+  // optional outline for readability
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+
+function updateTopHUD(){ document.getElementById('res').textContent = Math.floor(resources); document.getElementById('hqhp').textContent = Math.max(0, Math.ceil(hq.hp)); document.getElementById('php').textContent = Math.max(0, Math.ceil(player.hp)); document.getElementById('wave').textContent=wave; document.getElementById('timer').textContent=waveTimer.toFixed(1); }
+updateUIVisibility();
+
+
+// === UI visibility helper ===
+function updateUIVisibility(){
+  const inMenu  = (GAME_STATE === 'menu');
+  const playing = (GAME_STATE === 'playing');
+  const paused  = (GAME_STATE === 'paused');
+
+  // Top HUD: hidden in menu, visible otherwise
+  document.querySelector('.hud')?.style.setProperty('display', inMenu ? 'none' : '');
+
+  // Config + hint: hide in menu for a clean landing screen
+  document.getElementById('configWrap')?.style.setProperty('display', inMenu ? 'none' : '');
+  document.getElementById('hint')?.style.setProperty('display', inMenu ? 'none' : '');
+
+  // Right panel: only when playing AND something is selected
+  const panelEl = document.getElementById('panel');
+  if (panelEl) panelEl.hidden = !(playing && selected);
+}
+
+function getHQ(){ return hq; }
+
+function getTempBuilding(type,x,y){ const S=CFG.structures; const map={ barracks:()=>new Barracks(x,y), mg:()=>new MGTurret(x,y), shotgun:()=>new ShotgunTurret(x,y), laser: ()=> new LaserTurret(x,y), missile: ()=> new MissileRackTurret(x,y), slow:()=>new SlowTurret(x,y), drone:()=>new DroneTurret(x,y), tech:()=>new Tech(x,y), wall:()=>new Wall(x,y), dock:()=>new Dock(x,y) }; return map[type](); }
+function canPlace(temp){ for(const b of objects.buildings){ if(circleOverlap(temp.x,temp.y,temp.r+6, b.x,b.y,b.r+6)) return false; } return true; }
+
+// ===================== Rendering Selection Ring under cursor (optional)
+function worldToScreen(x,y){ return {x:x-camera.x, y:y-camera.y}; }
+
+// ===================== Simple Damage Handling for Buildings / Units =====================
+// Already embedded in Enemy + Projectile hit(). If you want walls to block bullets, extend here.
+
+// ===================== Controls Help =====================
+function drawHelp(){ const lines = [
+  'Controls:',
+  'WASD – Move Player',
+  'Space – Fire toward mouse',
+  'Left Click – Select friendly unit/building',
+  'Right Click – Move selected / Mine (on resource) / Place building (when in Build mode)',
+  'B – Toggle on‑screen tip',
+  'H – Toggle help overlay',
+  '',
+  'Gameplay:',
+  'HQ can only train Workers. Workers build and mine. Barracks trains Soldiers.',
+  'Turrets auto‑attack. Shotgun = AoE, Slow = applies slow, Drone = orbiting drones.',
+  'Tech building researches upgrades (player/units/turrets/global).',
+  'Walls block enemies and are destructible.',
+  'Enemies spawn in waves targeting HQ by default, but will go for closer targets.'
+];
+  const w=440; const x=20, y=80; ctx.save(); ctx.globalAlpha=0.9; ctx.fillStyle='rgba(10,12,22,0.85)'; ctx.fillRect(x,y,w, lines.length*18+20); ctx.strokeStyle='#3b427c'; ctx.strokeRect(x+0.5,y+0.5,w-1, lines.length*18+20-1); ctx.fillStyle='#cfe1ff'; ctx.font='13px system-ui, sans-serif'; for(let i=0;i<lines.length;i++){ ctx.fillText(lines[i], x+10, y+18+i*18); } ctx.restore(); }
+ 
+// ===================== Start Helpers =====================
+// Select HQ by default so user sees actions quickly
+select(hq);
+
+</script>
+<!-- ====== MOD HANDLER: paste this just before </body> ====== -->
+<script>
+(function(){
+
+  // ---------- 1) Global Game API ----------
+  const Game = {
+    version: "mod-api-1",
+    get CFG(){ return (typeof CFG!=="undefined") ? CFG : undefined; },
+    get upgrades(){ return (typeof upgrades!=="undefined") ? upgrades : undefined; },
+    get objects(){ return (typeof objects!=="undefined") ? objects : undefined; },
+    get resources(){ return (typeof resources!=="undefined") ? resources : undefined; },
+    set resources(v){ if(typeof resources!=="undefined") resources = v; },
+    get player(){ return (typeof player!=="undefined") ? player : undefined; },
+    get hq(){ return (typeof hq!=="undefined") ? hq : undefined; },
+
+    hooks: {
+      onInit: [],          // () => void
+      onTick: [],          // (dt: seconds) => void
+      onAfterWave: [],     // ({wave}) => void
+      onUnitSpawn: [],     // (unit) => void
+      onBuildingPlaced: [],// (building) => void
+      onSelect: [],        // (entity) => void
+    },
+
+    registerMod(name, fn){
+      try { fn(Game); console.log(`[MOD] Loaded: ${name}`); }
+      catch(err){ console.error(`[MOD] Failed: ${name}`, err); }
+    },
+
+    registerModFromSource(name, source){
+      try {
+        const f = new Function("Game", source);
+        f(Game);
+        console.log(`[MOD] Loaded from source: ${name}`);
+      } catch(err){
+        console.error(`[MOD] Source error: ${name}`, err);
+      }
+    }
+  };
+  window.Game = Game;
+
+  // ---------- 2) Hook wiring via safe monkey patches ----------
+  // helper: patch a global function by name
+  function after(name, tail){
+    const orig = window[name];
+    if (typeof orig !== "function") { console.warn(`[MOD] No function to patch: ${name}`); return; }
+    window[name] = function(...args){
+      const out = orig.apply(this, args);
+      try { tail && tail(out, args); } catch(e){ console.error(`[MOD] tail error: ${name}`, e); }
+      return out;
+    };
+  }
+
+  // Run onTick every frame without touching your main loop:
+  // Wrap requestAnimationFrame so every scheduled frame runs mod ticks first.
+  (function wrapRAF(){
+    const _raf = window.requestAnimationFrame;
+    if(!_raf) return;
+    let last = performance.now();
+    window.requestAnimationFrame = function(cb){
+      const wrapped = function(now){
+        const dt = Math.min(0.033, Math.max(0, (now - last) / 1000));
+        last = now;
+        const list = Game.hooks.onTick;
+        for(let i=0;i<list.length;i++){ try{ list[i](dt); }catch(e){ console.error("[MOD] onTick", e); } }
+        cb(now);
+      };
+      return _raf.call(window, wrapped);
+    };
+  })();
+
+  // After a wave spawns
+  after("spawnWave", function(){
+    const w = (typeof wave !== "undefined") ? wave : undefined;
+    const list = Game.hooks.onAfterWave;
+    for(let i=0;i<list.length;i++){ try{ list[i]({wave:w}); }catch(e){ console.error("[MOD] onAfterWave", e); } }
+  });
+
+  // When units spawn
+  after("spawnWorkerNear", function(){
+    try {
+      const u = objects && objects.units && objects.units[objects.units.length-1];
+      if(!u) return;
+      const list = Game.hooks.onUnitSpawn;
+      for(let i=0;i<list.length;i++){ try{ list[i](u); }catch(e){ console.error("[MOD] onUnitSpawn", e); } }
+    } catch(e){ console.error(e); }
+  });
+  after("spawnSoldierNear", function(){
+    try {
+      const u = objects && objects.units && objects.units[objects.units.length-1];
+      if(!u) return;
+      const list = Game.hooks.onUnitSpawn;
+      for(let i=0;i<list.length;i++){ try{ list[i](u); }catch(e){ console.error("[MOD] onUnitSpawn", e); } }
+    } catch(e){ console.error(e); }
+  });
+
+  // When a building is placed
+  // (this one gets the building object from return value)
+  (function(){
+    const orig = window.tryPlaceBuilding;
+    if(typeof orig === "function"){
+      window.tryPlaceBuilding = function(...args){
+        const res = orig.apply(this, args);
+        if(res){
+          const list = Game.hooks.onBuildingPlaced;
+          for(let i=0;i<list.length;i++){ try{ list[i](res); }catch(e){ console.error("[MOD] onBuildingPlaced", e); } }
+        }
+        return res;
+      };
+    } else {
+      console.warn("[MOD] No tryPlaceBuilding to patch");
+    }
+  })();
+
+  // When selection changes
+  (function(){
+    const orig = window.select;
+    if(typeof orig === "function"){
+      window.select = function(obj){
+        const out = orig.call(this, obj);
+        const list = Game.hooks.onSelect;
+        for(let i=0;i<list.length;i++){ try{ list[i](obj); }catch(e){ console.error("[MOD] onSelect", e); } }
+        return out;
+      };
+    } else {
+      console.warn("[MOD] No select() to patch");
+    }
+  })();
+
+  // Fire onInit once (after the original script finished building the world)
+  // Defer to ensure globals are ready:
+  setTimeout(()=>{
+    const list = Game.hooks.onInit;
+    for(let i=0;i<list.length;i++){ try{ list[i](); }catch(e){ console.error("[MOD] onInit", e); } }
+  }, 0);
+
+  
+
+  // ---------- 3) Lightweight Mods UI (paste-run console) ----------
+  // styles
+  const style = document.createElement("style");
+  style.textContent = `
+    .mod-panel {
+      position: absolute; right: 10px; bottom: 10px; width: 420px; max-width: calc(100vw - 20px);
+      background: rgba(16,20,36,0.92); border: 1px solid #2a2f58; border-radius: 14px; padding: 10px;
+      box-shadow: 0 6px 30px rgba(0,0,0,0.35); display: none; z-index: 30;
+    }
+    #modSrc {
+      width: 100%; height: 160px; border-radius: 10px; background: #0e1328; color: #cfe1ff;
+      border: 1px solid #2b335f; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px;
+    }
+    .mod-actions { display:flex; gap:8px; margin-top:8px; }
+  `;
+  document.head.appendChild(style);
+
+  // panel
+  const panel = document.createElement("div");
+  panel.className = "mod-panel";
+  panel.id = "modPanel";
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div><strong>Mods</strong> <span style="opacity:.7;font-size:12px">(paste JS → Load)</span></div>
+      <button class="btn" id="btnCloseMod" style="padding:6px 10px;background:#242a52;border:1px solid #39407a;border-radius:10px;color:#e8eaf6;cursor:pointer;">Close</button>
+    </div>
+    <textarea id="modSrc" spellcheck="false" placeholder="// Example:\\n// Game.hooks.onTick.push(dt=>{/* your logic */});\\n"></textarea>
+    <div class="mod-actions">
+      <button class="btn" id="btnLoadMod" style="padding:8px 10px;background:#242a52;border:1px solid #39407a;border-radius:10px;color:#e8eaf6;cursor:pointer;">Load Mod</button>
+      <button class="btn" id="btnSaveMod" style="padding:8px 10px;background:#242a52;border:1px solid #39407a;border-radius:10px;color:#e8eaf6;cursor:pointer;">Save</button>
+      <button class="btn" id="btnLoadSavedMod" style="padding:8px 10px;background:#242a52;border:1px solid #39407a;border-radius:10px;color:#e8eaf6;cursor:pointer;">Load Saved</button>
+      <button class="btn" id="btnExampleMod" style="padding:8px 10px;background:#242a52;border:1px solid #39407a;border-radius:10px;color:#e8eaf6;cursor:pointer;">Example</button>
+    </div>
+    <div class="small" style="font-size:12px;opacity:.8;margin-top:6px;">Saved as <code>miniRTS_mod</code> in localStorage.</div>
+  `;
+  document.body.appendChild(panel);
+
+  // toggle button in HUD
+  const hud = document.querySelector(".hud");
+  if(hud){
+    const btn = document.createElement("div");
+    btn.className = "pill";
+    btn.style.cursor = "pointer";
+    btn.textContent = "🧩 Mods";
+    btn.title = "Open Mods Console";
+    btn.onclick = ()=> panel.style.display = (panel.style.display==="none"||!panel.style.display) ? "block" : "none";
+    hud.appendChild(btn);
+  }
+
+  // wire buttons
+  const qs = id => panel.querySelector(id);
+  qs("#btnCloseMod").onclick = ()=> panel.style.display = "none";
+  qs("#btnLoadMod").onclick = ()=>{
+    const src = qs("#modSrc").value;
+    if(!src.trim()) return;
+    Game.registerModFromSource(`Pasted@${Date.now()}`, src);
+    const hint = document.getElementById("hint");
+    if(hint) hint.textContent = "Mod loaded.";
+  };
+  qs("#btnSaveMod").onclick = ()=>{
+    localStorage.setItem("miniRTS_mod", qs("#modSrc").value);
+    const hint = document.getElementById("hint");
+    if(hint) hint.textContent = "Saved mod to localStorage.";
+  };
+  qs("#btnLoadSavedMod").onclick = ()=>{
+    const v = localStorage.getItem("miniRTS_mod");
+    if(v!=null){ qs("#modSrc").value = v; const hint = document.getElementById("hint"); if(hint) hint.textContent = "Loaded saved mod."; }
+  };
+  qs("#btnExampleMod").onclick = ()=>{
+    const ex = `// Example Mod: resource glow & wave ping\\n`+
+`Game.hooks.onInit.push(()=>console.log('[MOD] onInit'));\\n`+
+`Game.hooks.onAfterWave.push(({wave})=>console.log('[MOD] after wave', wave));\\n`+
+`Game.hooks.onTick.push(dt=>{ Game._pulse=(Game._pulse||0)+dt; });\\n`+
+`if(!Game._resGlowPatched){\\n`+
+`  Game._resGlowPatched=true;\\n`+
+`  const _draw = ResourceNode.prototype.draw;\\n`+
+`  ResourceNode.prototype.draw = function(ctx){\\n`+
+`    _draw.call(this, ctx); if(this.dead) return;\\n`+
+`    ctx.save(); ctx.translate(this.x - (window.camera?.x||0), this.y - (window.camera?.y||0));\\n`+
+`    ctx.globalAlpha = 0.15 + 0.10 * Math.sin((Game._pulse||0)*4);\\n`+
+`    ctx.strokeStyle = '#7fe7f3'; ctx.lineWidth = 6;\\n`+
+`    ctx.beginPath(); ctx.arc(0,0,this.r+6,0,Math.PI*2); ctx.stroke();\\n`+
+`    ctx.restore();\\n`+
+`  };\\n`+
+`}\\n`;
+    qs("#modSrc").value = ex;
+  };
+
+})();
+</script>
+<!-- ====== /MOD HANDLER ====== -->
+
+</body>
+</html>
